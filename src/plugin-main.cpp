@@ -108,6 +108,15 @@ bool obs_module_load(void)
 		     override_seconds);
 	}
 
+	if (const char *motion_env = std::getenv("OBS_AUTOSTOP_MOTION")) {
+		const bool on = motion_env[0] == '1' || motion_env[0] == 't' ||
+				motion_env[0] == 'T' || motion_env[0] == 'y' ||
+				motion_env[0] == 'Y';
+		g_motion.setEnabled(on);
+		blog(LOG_INFO, "OBS Auto Stop: motion detection %s (OBS_AUTOSTOP_MOTION)",
+		     on ? "enabled" : "disabled");
+	}
+
 	obs_frontend_add_event_callback(onFrontendEvent, nullptr);
 	obs_add_tick_callback(onTick, nullptr);
 	return true;
