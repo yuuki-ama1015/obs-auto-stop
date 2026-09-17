@@ -127,9 +127,11 @@ jobs:
 
           $dev = $env:OBS_DEV
           $cmake = Get-Content -Raw plugin/CMakeLists.txt
-          $cmake = $cmake -replace 'find_library\(OBS_LIBOBS_LIBRARY[\s\S]*?\)', "set(OBS_LIBOBS_LIBRARY \"$dev/lib/obs.lib\" CACHE FILEPATH \"libobs\" FORCE)"
-          $cmake = $cmake -replace 'find_library\(OBS_FRONTEND_API_LIBRARY[\s\S]*?\)', "set(OBS_FRONTEND_API_LIBRARY \"$dev/lib/obs-frontend-api.lib\" CACHE FILEPATH \"frontend-api\" FORCE)"
-          Set-Content -Encoding utf8NoBOM plugin/CMakeLists.txt $cmake
+          $libobsSet = 'set(OBS_LIBOBS_LIBRARY "' + ($dev + '/lib/obs.lib') + '" CACHE FILEPATH "libobs" FORCE)'
+          $feSet = 'set(OBS_FRONTEND_API_LIBRARY "' + ($dev + '/lib/obs-frontend-api.lib') + '" CACHE FILEPATH "frontend-api" FORCE)'
+          $cmake = $cmake -replace 'find_library\(OBS_LIBOBS_LIBRARY[\s\S]*?\)', $libobsSet
+          $cmake = $cmake -replace 'find_library\(OBS_FRONTEND_API_LIBRARY[\s\S]*?\)', $feSet
+          [System.IO.File]::WriteAllText((Join-Path $pwd 'plugin/CMakeLists.txt'), $cmake)
 
           cmake -S plugin -B plugin-build -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_PREFIX_PATH="$qtRoot;${{ github.workspace }}/obs-deps" `
