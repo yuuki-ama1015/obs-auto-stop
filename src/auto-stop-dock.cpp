@@ -49,7 +49,7 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->setContentsMargins(8, 8, 8, 8);
 	layout->setSpacing(8);
 
-	autoStopCheck_ = new QCheckBox(QStringLiteral("録画の自動停止"), this);
+	autoStopCheck_ = new QCheckBox(QStringLiteral("タイマーによって自動で録画終了"), this);
 	maxMinutesSpin_ = new QSpinBox(this);
 	maxMinutesSpin_->setRange(0, 999);
 	maxMinutesSpin_->setSuffix(QStringLiteral(" 分"));
@@ -60,7 +60,7 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	timerForm->setContentsMargins(0, 0, 0, 0);
 	timerForm->addRow(QStringLiteral("録画タイマー"), maxMinutesSpin_);
 
-	motionCheck_ = new QCheckBox(QStringLiteral("画面が一定時間静止したら録画終了"), this);
+	motionCheck_ = new QCheckBox(QStringLiteral("画面が一定時間静止したら自動で録画終了"), this);
 	inactivitySpin_ = new QSpinBox(this);
 	inactivitySpin_->setRange(1, 600);
 	inactivitySpin_->setSuffix(QStringLiteral(" 秒"));
@@ -255,7 +255,7 @@ void AutoStopDock::refreshStatus()
 
 	if (!monitor_->isEnabled()) {
 		statusLabel_->setText(
-			QStringLiteral("プラグインステータス: 録画の自動停止 OFF"));
+			QStringLiteral("プラグインステータス: 自動停止 OFF"));
 	} else if (monitor_->isRecording()) {
 		statusLabel_->setText(QStringLiteral("プラグインステータス: 録画中"));
 	} else if (stop_ && stop_->stopRequested()) {
