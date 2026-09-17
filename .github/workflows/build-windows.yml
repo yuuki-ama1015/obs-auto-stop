@@ -125,7 +125,7 @@ jobs:
           if (-not $qtRoot -and (Test-Path obs-deps/lib/cmake/Qt6)) { $qtRoot = (Resolve-Path obs-deps).Path }
           if (-not $qtRoot) { Get-ChildItem -Recurse obs-deps -Directory -Filter cmake | Select-Object -First 20 FullName; throw 'Qt6 cmake package not found' }
 
-          $dev = $env:OBS_DEV
+          $dev = ($env:OBS_DEV -replace '\\', '/')
           $cmake = Get-Content -Raw plugin/CMakeLists.txt
           $libobsSet = 'set(OBS_LIBOBS_LIBRARY "' + ($dev + '/lib/obs.lib') + '" CACHE FILEPATH "libobs" FORCE)'
           $feSet = 'set(OBS_FRONTEND_API_LIBRARY "' + ($dev + '/lib/obs-frontend-api.lib') + '" CACHE FILEPATH "frontend-api" FORCE)'
