@@ -77,67 +77,111 @@ jobs:
       - name: Stage OBS dev layout for plugin CMake
         shell: pwsh
         run: |
-          $dev = Join-Path $pwd 'obs-dev'
+          $root = ((Resolve-Path .).Path -replace '\\', '/')
+          $dev = "$root/obs-dev"
           New-Item -ItemType Directory -Force -Path "$dev/lib" | Out-Null
-          $candidates = @(
-            'obs-build/libobs/Release/obs.lib',
-            'obs-build/libobs/obs.lib'
-          )
-          $obsLib = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $obsLib) { throw "obs.lib not found" }
-          Copy-Item $obsLib "$dev/lib/obs.lib" -Force
 
-          $feCandidates = @(
-            'obs-build/frontend/api/Release/obs-frontend-api.lib',
-            'obs-build/UI/obs-frontend-api/Release/obs-frontend-api.lib',
-            'obs-build/libUI/obs-frontend-api/Release/obs-frontend-api.lib',
-            'obs-build/obs-frontend-api/Release/obs-frontend-api.lib'
-          )
-          $feLib = $feCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $feLib) {
-            $found = Get-ChildItem -Recurse obs-build -Filter 'obs-frontend-api.lib' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $feLib = $found.FullName }
-          }
-          if (-not $feLib) {
-            Get-ChildItem -Recurse obs-build -Filter '*.lib' | Select-Object -First 40 FullName
-            throw 'obs-frontend-api.lib not found'
-          }
-          Write-Output "Using frontend-api: $feLib"
-          Copy-Item $feLib "$dev/lib/obs-frontend-api.lib" -Force
+          $obsLib = Get-ChildItem -Recurse obs-build -Filter 'obs.lib' | Select-Object -First 1
+          if (-not $obsLib) { throw 'obs.lib not found' }
+          Copy-Item $obsLib.FullName "$dev/lib/obs.lib" -Force
 
-          $pthreads = Get-ChildItem -Recurse obs-build/deps/w32-pthreads -Filter 'w32-pthreads.lib' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($pthreads) { Copy-Item $pthreads.FullName "$dev/lib/w32-pthreads.lib" -Force }
+          $feLib = Get-ChildItem -Recurse obs-build -Filter 'obs-frontend-api.lib' | Select-Object -First 1
+          if (-not $feLib) { throw 'obs-frontend-api.lib not found' }
+          Copy-Item $feLib.FullName "$dev/lib/obs-frontend-api.lib" -Force
 
-          Write-Output "Staged:"
-          Get-ChildItem $dev/lib | Format-Table Name, Length
-          # expose for next step via env file
+          $studio = "$root/obs-studio"
+          $build = "$root/obs-build"
+          # OBS 32 ships obs-config.h in source libobs/
+          $genInc = "$studio/libobs"
+          if (Test-Path "$build/config/obs-config.h") { $genInc = "$build/config" }
+          $libInc = "$studio/libobs"
+          $feInc = "$studio/frontend/api"
+
           "OBS_DEV=$dev" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "OBS_STUDIO=${{ github.workspace }}/obs-studio" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "OBS_BUILD=${{ github.workspace }}/obs-build" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_STUDIO=$studio" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_BUILD=$build" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_LIB_INC=$libInc" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_GEN_INC=$genInc" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_FE_INC=$feInc" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Output "libInc=$libInc"
+          Write-Output "genInc=$genInc"
+          Write-Output "feInc=$feInc"
+          Write-Output "feLib=$($feLib.FullName)"
 
       - name: Configure plugin
         shell: pwsh
         run: |
           $qtRoot = $null
           foreach ($r in (Get-ChildItem obs-deps -Directory)) {
-            if (Test-Path (Join-Path $r.FullName 'lib/cmake/Qt6')) { $qtRoot = $r.FullName; break }
+            if (Test-Path (Join-Path $r.FullName 'lib/cmake/Qt6')) {
+              $qtRoot = ($r.FullName -replace '\\', '/')
+              break
+            }
           }
-          if (-not $qtRoot -and (Test-Path obs-deps/lib/cmake/Qt6)) { $qtRoot = (Resolve-Path obs-deps).Path }
-          if (-not $qtRoot) { Get-ChildItem -Recurse obs-deps -Directory -Filter cmake | Select-Object -First 20 FullName; throw 'Qt6 cmake package not found' }
-          $qtRoot = ($qtRoot -replace '\\', '/')
+          if (-not $qtRoot -and (Test-Path obs-deps/lib/cmake/Qt6)) {
+            $qtRoot = ((Resolve-Path obs-deps).Path -replace '\\', '/')
+          }
+          if (-not $qtRoot) { throw 'Qt6 cmake package not found' }
 
           $dev = ($env:OBS_DEV -replace '\\', '/')
-          $cmake = Get-Content -Raw plugin/CMakeLists.txt
-          $libobsSet = 'set(OBS_LIBOBS_LIBRARY "' + ($dev + '/lib/obs.lib') + '" CACHE FILEPATH "libobs" FORCE)'
-          $feSet = 'set(OBS_FRONTEND_API_LIBRARY "' + ($dev + '/lib/obs-frontend-api.lib') + '" CACHE FILEPATH "frontend-api" FORCE)'
-          $cmake = $cmake -replace 'find_library\(OBS_LIBOBS_LIBRARY[\s\S]*?\)', $libobsSet
-          $cmake = $cmake -replace 'find_library\(OBS_FRONTEND_API_LIBRARY[\s\S]*?\)', $feSet
-          [System.IO.File]::WriteAllText((Join-Path $pwd 'plugin/CMakeLists.txt'), $cmake)
+          $libInc = ($env:OBS_LIB_INC -replace '\\', '/')
+          $genInc = ($env:OBS_GEN_INC -replace '\\', '/')
+          $feInc = ($env:OBS_FE_INC -replace '\\', '/')
+          $studio = ($env:OBS_STUDIO -replace '\\', '/')
+          $build = ($env:OBS_BUILD -replace '\\', '/')
+
+          $cmakePath = Join-Path $pwd 'plugin/CMakeLists.txt'
+          $cmake = Get-Content -Raw $cmakePath
+          $cmake = $cmake.Replace('find_path(OBS_LIBOBS_INCLUDE_DIR', "set(OBS_LIBOBS_INCLUDE_DIR `"$libInc`" CACHE PATH `"libobs include`" FORCE)`nfind_path(OBS_LIBOBS_INCLUDE_DIR_DISABLED")
+          # Safer: rewrite the four find_* blocks with explicit markers via line-based edit
+          $lines = Get-Content $cmakePath
+          $out = New-Object System.Collections.Generic.List[string]
+          $i = 0
+          while ($i -lt $lines.Count) {
+            $line = $lines[$i]
+            if ($line -match 'find_path\(OBS_LIBOBS_INCLUDE_DIR') {
+              $out.Add("set(OBS_LIBOBS_INCLUDE_DIR `"$libInc`" CACHE PATH `"libobs include`" FORCE)")
+              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
+              $i++
+              continue
+            }
+            if ($line -match 'find_path\(OBS_GENERATED_INCLUDE_DIR') {
+              $out.Add("set(OBS_GENERATED_INCLUDE_DIR `"$genInc`" CACHE PATH `"generated include`" FORCE)")
+              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
+              $i++
+              continue
+            }
+            if ($line -match 'find_library\(OBS_LIBOBS_LIBRARY') {
+              $out.Add("set(OBS_LIBOBS_LIBRARY `"$dev/lib/obs.lib`" CACHE FILEPATH `"libobs`" FORCE)")
+              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
+              $i++
+              continue
+            }
+            if ($line -match 'find_library\(OBS_FRONTEND_API_LIBRARY') {
+              $out.Add("set(OBS_FRONTEND_API_LIBRARY `"$dev/lib/obs-frontend-api.lib`" CACHE FILEPATH `"frontend-api`" FORCE)")
+              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
+              $i++
+              continue
+            }
+            if ($line -match 'target_include_directories\(obs-auto-stop PRIVATE') {
+              $out.Add('target_include_directories(obs-auto-stop PRIVATE')
+              $out.Add("        `"$libInc`"")
+              $out.Add("        `"$genInc`"")
+              $out.Add("        `"$feInc`"")
+              $out.Add(')')
+              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
+              $i++
+              continue
+            }
+            $out.Add($line)
+            $i++
+          }
+          [System.IO.File]::WriteAllLines($cmakePath, $out)
 
           cmake -S plugin -B plugin-build -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_PREFIX_PATH="$qtRoot;${{ github.workspace }}/obs-deps" `
-            -DOBS_SOURCE_DIR="$env:OBS_STUDIO" `
-            -DOBS_BUILD_DIR="$env:OBS_BUILD"
+            -DCMAKE_PREFIX_PATH="$qtRoot" `
+            -DOBS_SOURCE_DIR="$studio" `
+            -DOBS_BUILD_DIR="$build"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build plugin
