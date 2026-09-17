@@ -6,8 +6,8 @@ class QCheckBox;
 class QSpinBox;
 class QDoubleSpinBox;
 class QLabel;
+class QPushButton;
 class QTimer;
-class QWidget;
 
 class RecordingMonitor;
 class MotionDetector;
@@ -29,13 +29,14 @@ private slots:
 	void onSensitivityChanged(double percent);
 	void onMinRecordingMinutesChanged(int minutes);
 	void onRegionToggled(bool enabled);
-	void onRegionChanged();
+	void onSelectRegionClicked();
 	void refreshStatus();
 
 private:
 	void loadSettings();
 	void saveSettings() const;
 	void updateRegionControlsEnabled();
+	void updateRegionStatusLabel();
 
 	RecordingMonitor *monitor_ = nullptr;
 	MotionDetector *motion_ = nullptr;
@@ -48,13 +49,16 @@ private:
 	QDoubleSpinBox *sensitivitySpin_ = nullptr;
 	QSpinBox *minRecordingSpin_ = nullptr;
 	QCheckBox *regionCheck_ = nullptr;
-	QSpinBox *regionXSpin_ = nullptr;
-	QSpinBox *regionYSpin_ = nullptr;
-	QSpinBox *regionWSpin_ = nullptr;
-	QSpinBox *regionHSpin_ = nullptr;
+	QPushButton *selectRegionButton_ = nullptr;
+	QLabel *regionStatusLabel_ = nullptr;
 	QWidget *regionWidget_ = nullptr;
 	QLabel *statusLabel_ = nullptr;
 	QLabel *elapsedLabel_ = nullptr;
 	QLabel *motionLabel_ = nullptr;
 	QTimer *refreshTimer_ = nullptr;
+
+	int regionX_ = 0;
+	int regionY_ = 0;
+	int regionW_ = 100;
+	int regionH_ = 100;
 };
