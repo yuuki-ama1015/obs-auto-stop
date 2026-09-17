@@ -1,0 +1,182 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin_ref:
+        description: Git ref of obs-auto-stop to build
+        required: true
+        default: v0.1.0-pre-region
+      attach_release:
+        description: Release tag to attach the zip to (empty to skip)
+        required: false
+        default: v0.1.0-pre-region
+      obs_ref:
+        description: obs-studio ref
+        required: false
+        default: 32.0.2
+      deps_date:
+        description: obs-deps date tag
+        required: false
+        default: 2025-08-23
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.plugin_ref }}
+          path: plugin
+
+      - name: Checkout obs-studio
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: ${{ github.event.inputs.obs_ref }}
+          submodules: recursive
+          path: obs-studio
+
+      - name: Download obs-deps + Qt6
+        shell: pwsh
+        run: |
+          $date = '${{ github.event.inputs.deps_date }}'
+          $base = "https://github.com/obsproject/obs-deps/releases/download/$date"
+          New-Item -ItemType Directory -Force -Path obs-deps | Out-Null
+          Invoke-WebRequest "$base/windows-deps-$date-x64.zip" -OutFile deps.zip
+          Invoke-WebRequest "$base/windows-deps-qt6-$date-x64.zip" -OutFile qt6.zip
+          Expand-Archive deps.zip -DestinationPath obs-deps -Force
+          Expand-Archive qt6.zip -DestinationPath obs-deps -Force
+          Get-ChildItem obs-deps | Select-Object Name
+
+      - name: Configure obs-studio (libobs + frontend-api)
+        shell: pwsh
+        run: |
+          cmake -S obs-studio -B obs-build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/obs-deps" `
+            -DENABLE_UI=ON `
+            -DENABLE_FRONTEND=ON `
+            -DENABLE_PLUGINS=OFF `
+            -DENABLE_BROWSER=OFF `
+            -DENABLE_SCRIPTING=OFF `
+            -DENABLE_WEBSOCKET=OFF `
+            -DENABLE_AJA=OFF `
+            -DENABLE_VLC=OFF `
+            -DENABLE_QSV11=OFF `
+            -DENABLE_WEBRTC=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build obs-frontend-api
+        shell: pwsh
+        run: |
+          cmake --build obs-build --target obs-frontend-api --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage OBS dev layout for plugin CMake
+        shell: pwsh
+        run: |
+          $dev = Join-Path $pwd 'obs-dev'
+          New-Item -ItemType Directory -Force -Path "$dev/lib" | Out-Null
+          $candidates = @(
+            'obs-build/libobs/Release/obs.lib',
+            'obs-build/libobs/obs.lib'
+          )
+          $obsLib = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $obsLib) { throw "obs.lib not found" }
+          Copy-Item $obsLib "$dev/lib/obs.lib" -Force
+
+          $feCandidates = @(
+            'obs-build/UI/obs-frontend-api/Release/obs-frontend-api.lib',
+            'obs-build/libUI/obs-frontend-api/Release/obs-frontend-api.lib',
+            'obs-build/obs-frontend-api/Release/obs-frontend-api.lib'
+          )
+          $feLib = $feCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $feLib) {
+            Get-ChildItem -Recurse obs-build -Filter 'obs-frontend-api.lib' | Select-Object FullName
+            throw 'obs-frontend-api.lib not found'
+          }
+          Copy-Item $feLib "$dev/lib/obs-frontend-api.lib" -Force
+
+          $pthreads = Get-ChildItem -Recurse obs-build/deps/w32-pthreads -Filter 'w32-pthreads.lib' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($pthreads) { Copy-Item $pthreads.FullName "$dev/lib/w32-pthreads.lib" -Force }
+
+          Write-Output "Staged:"
+          Get-ChildItem $dev/lib | Format-Table Name, Length
+          # expose for next step via env file
+          "OBS_DEV=$dev" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_STUDIO=${{ github.workspace }}/obs-studio" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "OBS_BUILD=${{ github.workspace }}/obs-build" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure plugin
+        shell: pwsh
+        run: |
+          $qtRoot = $null
+          foreach ($r in (Get-ChildItem obs-deps -Directory)) {
+            if (Test-Path (Join-Path $r.FullName 'lib/cmake/Qt6')) { $qtRoot = $r.FullName; break }
+          }
+          if (-not $qtRoot -and (Test-Path obs-deps/lib/cmake/Qt6)) { $qtRoot = (Resolve-Path obs-deps).Path }
+          if (-not $qtRoot) { Get-ChildItem -Recurse obs-deps -Directory -Filter cmake | Select-Object -First 20 FullName; throw 'Qt6 cmake package not found' }
+
+          $dev = $env:OBS_DEV
+          $cmake = Get-Content -Raw plugin/CMakeLists.txt
+          $cmake = $cmake -replace 'find_library\(OBS_LIBOBS_LIBRARY[\s\S]*?\)', "set(OBS_LIBOBS_LIBRARY \"$dev/lib/obs.lib\" CACHE FILEPATH \"libobs\" FORCE)"
+          $cmake = $cmake -replace 'find_library\(OBS_FRONTEND_API_LIBRARY[\s\S]*?\)', "set(OBS_FRONTEND_API_LIBRARY \"$dev/lib/obs-frontend-api.lib\" CACHE FILEPATH \"frontend-api\" FORCE)"
+          Set-Content -Encoding utf8NoBOM plugin/CMakeLists.txt $cmake
+
+          cmake -S plugin -B plugin-build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_PREFIX_PATH="$qtRoot;${{ github.workspace }}/obs-deps" `
+            -DOBS_SOURCE_DIR="$env:OBS_STUDIO" `
+            -DOBS_BUILD_DIR="$env:OBS_BUILD"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build plugin
+        shell: pwsh
+        run: |
+          cmake --build plugin-build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem -Recurse plugin-build -Filter 'obs-auto-stop.dll' | Format-Table FullName, Length
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Recurse plugin-build -Filter 'obs-auto-stop.dll' | Select-Object -First 1
+          if (-not $dll) { throw 'obs-auto-stop.dll not found' }
+          $stage = Join-Path $pwd 'stage/obs-auto-stop'
+          New-Item -ItemType Directory -Force -Path "$stage/bin/64bit" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage/data/locale" | Out-Null
+          Copy-Item $dll.FullName "$stage/bin/64bit/obs-auto-stop.dll" -Force
+          $localeSrc = Join-Path $pwd 'plugin/data/locale'
+          if (Test-Path $localeSrc) {
+            Copy-Item "$localeSrc/*" "$stage/data/locale/" -Force
+          }
+          @(
+            'OBS Auto Stop — pre-region Windows build',
+            "Plugin ref: ${{ github.event.inputs.plugin_ref }}",
+            "OBS ref: ${{ github.event.inputs.obs_ref }}",
+            'Built for Windows x64 / OBS 32.x',
+            '',
+            'Install:',
+            'Extract so that obs-auto-stop/ is under %APPDATA%\obs-studio\plugins\',
+            'Then restart OBS.'
+          ) | Set-Content -Encoding utf8 "$stage/README-DIST.txt"
+          $zipName = 'obs-auto-stop-v0.1.0-pre-region-windows.zip'
+          if (Test-Path $zipName) { Remove-Item $zipName -Force }
+          Compress-Archive -Path (Join-Path $pwd 'stage/obs-auto-stop') -DestinationPath $zipName -Force
+          Get-Item $zipName | Format-List FullName, Length
+          "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-auto-stop-windows
+          path: ${{ env.ZIP_NAME }}
+
+      - name: Attach to GitHub Release
+        if: ${{ github.event.inputs.attach_release != '' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload '${{ github.event.inputs.attach_release }}' '${{ env.ZIP_NAME }}' --repo ${{ github.repository }} --clobber
