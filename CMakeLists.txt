@@ -51,4 +51,22 @@ else()
         PREFIX ""
         OUTPUT_NAME "obs-auto-stop"
     )
+
+    # Package locale data beside the module (OBS looks for data/locale relative to the plugin).
+    set(_obs_data_dir "${CMAKE_BINARY_DIR}/obs-auto-stop/data")
+    add_custom_command(TARGET obs-auto-stop POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_obs_data_dir}/locale"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/locale/en-US.ini"
+            "${_obs_data_dir}/locale/en-US.ini"
+        COMMENT "Copying OBS Auto Stop locale data"
+    )
+
+    include(GNUInstallDirs)
+    install(TARGETS obs-auto-stop
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins
+    )
+    install(DIRECTORY data/
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins/obs-auto-stop/data
+    )
 endif()
