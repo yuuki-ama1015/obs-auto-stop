@@ -2,16 +2,18 @@
 
 #include "motion-detector.hpp"
 #include "recording-monitor.hpp"
+#include "region-select-dialog.hpp"
 #include "stop-controller.hpp"
 
 #include <obs-frontend-api.h>
 #include <util/config-file.h>
 
 #include <QCheckBox>
+#include <QDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
-#include <QGroupBox>
 #include <QLabel>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -78,23 +80,16 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	motionForm->addRow(QStringLiteral("最低録画時間"), minRecordingSpin_);
 
 	regionCheck_ = new QCheckBox(QStringLiteral("監視領域を限定する"), this);
-	regionXSpin_ = new QSpinBox(this);
-	regionYSpin_ = new QSpinBox(this);
-	regionWSpin_ = new QSpinBox(this);
-	regionHSpin_ = new QSpinBox(this);
-	for (auto *spin : {regionXSpin_, regionYSpin_, regionWSpin_, regionHSpin_}) {
-		spin->setRange(0, 100);
-		spin->setSuffix(QStringLiteral(" %"));
-	}
-	regionWSpin_->setMinimum(1);
-	regionHSpin_->setMinimum(1);
+	selectRegionButton_ =
+		new QPushButton(QStringLiteral("領域を選択"), this);
+	regionStatusLabel_ = new QLabel(this);
+	regionStatusLabel_->setWordWrap(true);
 
-	auto *regionForm = new QFormLayout;
+	auto *regionForm = new QVBoxLayout;
 	regionForm->setContentsMargins(0, 0, 0, 0);
-	regionForm->addRow(QStringLiteral("左"), regionXSpin_);
-	regionForm->addRow(QStringLiteral("上"), regionYSpin_);
-	regionForm->addRow(QStringLiteral("幅"), regionWSpin_);
-	regionForm->addRow(QStringLiteral("高さ"), regionHSpin_);
+	regionForm->setSpacing(4);
+	regionForm->addWidget(selectRegionButton_);
+	regionForm->addWidget(regionStatusLabel_);
 
 	regionWidget_ = new QWidget(this);
 	regionWidget_->setLayout(regionForm);
@@ -130,14 +125,8 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 		&AutoStopDock::onMinRecordingMinutesChanged);
 	connect(regionCheck_, &QCheckBox::toggled, this,
 		&AutoStopDock::onRegionToggled);
-	connect(regionXSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
-		&AutoStopDock::onRegionChanged);
-	connect(regionYSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
-		&AutoStopDock::onRegionChanged);
-	connect(regionWSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
-		&AutoStopDock::onRegionChanged);
-	connect(regionHSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
-		&AutoStopDock::onRegionChanged);
+	connect(selectRegionButton_, &QPushButton::clicked, this,
+		&AutoStopDock::onSelectRegionClicked);
 
 	refreshTimer_ = new QTimer(this);
 	refreshTimer_->setInterval(500);
@@ -210,28 +199,31 @@ void AutoStopDock::onRegionToggled(bool enabled)
 	saveSettings();
 }
 
-void AutoStopDock::onRegionChanged()
+void AutoStopDock::onSelectRegionClicked()
 {
-	if (motion_) {
-		motion_->setRegionPercent(regionXSpin_->value(),
-					  regionYSpin_->value(),
-					  regionWSpin_->value(),
-					  regionHSpin_->value());
-		int x, y, w, h;
-		motion_->regionPercent(x, y, w, h);
-		const bool blocked = regionXSpin_->blockSignals(true);
-		regionYSpin_->blockSignals(true);
-		regionWSpin_->blockSignals(true);
-		regionHSpin_->blockSignals(true);
-		regionXSpin_->setValue(x);
-		regionYSpin_->setValue(y);
-		regionWSpin_->setValue(w);
-		regionHSpin_->setValue(h);
-		regionXSpin_->blockSignals(blocked);
-		regionYSpin_->blockSignals(false);
-		regionWSpin_->blockSignals(false);
-		regionHSpin_->blockSignals(false);
+	QWidget *parent = this;
+	if (void *mainWin = obs_frontend_get_main_window()) {
+		parent = static_cast<QWidget *>(mainWin);
 	}
+
+	RegionSelectDialog dialog(parent, regionX_, regionY_, regionW_,
+				  regionH_);
+	if (dialog.exec() != QDialog::Accepted) {
+		return;
+	}
+
+	regionX_ = dialog.regionX();
+	regionY_ = dialog.regionY();
+	regionW_ = dialog.regionW();
+	regionH_ = dialog.regionH();
+
+	if (motion_) {
+		motion_->setRegionPercent(regionX_, regionY_, regionW_,
+					  regionH_);
+		motion_->regionPercent(regionX_, regionY_, regionW_, regionH_);
+	}
+
+	updateRegionStatusLabel();
 	saveSettings();
 }
 
@@ -239,6 +231,17 @@ void AutoStopDock::updateRegionControlsEnabled()
 {
 	const bool on = regionCheck_->isChecked();
 	regionWidget_->setEnabled(on);
+	selectRegionButton_->setEnabled(on);
+}
+
+void AutoStopDock::updateRegionStatusLabel()
+{
+	regionStatusLabel_->setText(
+		QStringLiteral("領域: %1%, %2%  %3%×%4%")
+			.arg(regionX_)
+			.arg(regionY_)
+			.arg(regionW_)
+			.arg(regionH_));
 }
 
 void AutoStopDock::refreshStatus()
@@ -280,7 +283,7 @@ void AutoStopDock::refreshStatus()
 		if (motion_->isRegionEnabled()) {
 			int x, y, w, h;
 			motion_->regionPercent(x, y, w, h);
-			regionNote = QStringLiteral(" / 領域 %1,%2 %3x%4%%")
+			regionNote = QStringLiteral(" / 領域 %1%,%2% %3%x%4%%")
 					     .arg(x)
 					     .arg(y)
 					     .arg(w)
@@ -309,10 +312,10 @@ void AutoStopDock::loadSettings()
 		sensitivitySpin_->setValue(kDefaultSensitivity);
 		minRecordingSpin_->setValue(kDefaultMinRecordingMin);
 		regionCheck_->setChecked(false);
-		regionXSpin_->setValue(0);
-		regionYSpin_->setValue(0);
-		regionWSpin_->setValue(100);
-		regionHSpin_->setValue(100);
+		regionX_ = 0;
+		regionY_ = 0;
+		regionW_ = 100;
+		regionH_ = 100;
 		if (monitor_) {
 			monitor_->setEnabled(true);
 			monitor_->setMaxRecordingDuration(
@@ -333,6 +336,7 @@ void AutoStopDock::loadSettings()
 
 	if (!config) {
 		applyDefaults();
+		updateRegionStatusLabel();
 		updateRegionControlsEnabled();
 		return;
 	}
@@ -394,10 +398,6 @@ void AutoStopDock::loadSettings()
 	const bool old5 = sensitivitySpin_->blockSignals(true);
 	const bool old6 = minRecordingSpin_->blockSignals(true);
 	const bool old7 = regionCheck_->blockSignals(true);
-	const bool old8 = regionXSpin_->blockSignals(true);
-	const bool old9 = regionYSpin_->blockSignals(true);
-	const bool old10 = regionWSpin_->blockSignals(true);
-	const bool old11 = regionHSpin_->blockSignals(true);
 
 	autoStopCheck_->setChecked(enabled);
 	maxMinutesSpin_->setValue(minutes);
@@ -406,10 +406,10 @@ void AutoStopDock::loadSettings()
 	sensitivitySpin_->setValue(sensitivity);
 	minRecordingSpin_->setValue(minRecMin);
 	regionCheck_->setChecked(regionEnabled);
-	regionXSpin_->setValue(rx);
-	regionYSpin_->setValue(ry);
-	regionWSpin_->setValue(rw);
-	regionHSpin_->setValue(rh);
+	regionX_ = rx;
+	regionY_ = ry;
+	regionW_ = rw;
+	regionH_ = rh;
 
 	autoStopCheck_->blockSignals(old1);
 	maxMinutesSpin_->blockSignals(old2);
@@ -418,10 +418,6 @@ void AutoStopDock::loadSettings()
 	sensitivitySpin_->blockSignals(old5);
 	minRecordingSpin_->blockSignals(old6);
 	regionCheck_->blockSignals(old7);
-	regionXSpin_->blockSignals(old8);
-	regionYSpin_->blockSignals(old9);
-	regionWSpin_->blockSignals(old10);
-	regionHSpin_->blockSignals(old11);
 
 	if (monitor_) {
 		monitor_->setEnabled(enabled);
@@ -437,8 +433,10 @@ void AutoStopDock::loadSettings()
 					     60});
 		motion_->setRegionEnabled(regionEnabled);
 		motion_->setRegionPercent(rx, ry, rw, rh);
+		motion_->regionPercent(regionX_, regionY_, regionW_, regionH_);
 	}
 
+	updateRegionStatusLabel();
 	updateRegionControlsEnabled();
 }
 
@@ -462,13 +460,9 @@ void AutoStopDock::saveSettings() const
 		       minRecordingSpin_->value());
 	config_set_bool(config, kConfigSection, kKeyRegionEnabled,
 			regionCheck_->isChecked());
-	config_set_int(config, kConfigSection, kKeyRegionX,
-		       regionXSpin_->value());
-	config_set_int(config, kConfigSection, kKeyRegionY,
-		       regionYSpin_->value());
-	config_set_int(config, kConfigSection, kKeyRegionW,
-		       regionWSpin_->value());
-	config_set_int(config, kConfigSection, kKeyRegionH,
-		       regionHSpin_->value());
+	config_set_int(config, kConfigSection, kKeyRegionX, regionX_);
+	config_set_int(config, kConfigSection, kKeyRegionY, regionY_);
+	config_set_int(config, kConfigSection, kKeyRegionW, regionW_);
+	config_set_int(config, kConfigSection, kKeyRegionH, regionH_);
 	config_save_safe(config, "tmp", nullptr);
 }
