@@ -41,18 +41,18 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->setContentsMargins(8, 8, 8, 8);
 	layout->setSpacing(8);
 
-	autoStopCheck_ = new QCheckBox(QStringLiteral("自動停止"), this);
+	autoStopCheck_ = new QCheckBox(QStringLiteral("録画の自動停止"), this);
 	maxMinutesSpin_ = new QSpinBox(this);
 	maxMinutesSpin_->setRange(0, 999);
 	maxMinutesSpin_->setSuffix(QStringLiteral(" 分"));
 	maxMinutesSpin_->setToolTip(
-		QStringLiteral("0 にすると最大録画時間による自動停止は無効です"));
+		QStringLiteral("0 にすると録画タイマーによる自動停止は無効です"));
 
 	auto *timerForm = new QFormLayout;
 	timerForm->setContentsMargins(0, 0, 0, 0);
-	timerForm->addRow(QStringLiteral("最大録画時間"), maxMinutesSpin_);
+	timerForm->addRow(QStringLiteral("録画タイマー"), maxMinutesSpin_);
 
-	motionCheck_ = new QCheckBox(QStringLiteral("静止検出"), this);
+	motionCheck_ = new QCheckBox(QStringLiteral("画面静止で録画終了"), this);
 	inactivitySpin_ = new QSpinBox(this);
 	inactivitySpin_->setRange(1, 600);
 	inactivitySpin_->setSuffix(QStringLiteral(" 秒"));
@@ -67,11 +67,11 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	auto *motionForm = new QFormLayout;
 	motionForm->setContentsMargins(0, 0, 0, 0);
 	motionForm->addRow(motionCheck_);
-	motionForm->addRow(QStringLiteral("静止判定時間"), inactivitySpin_);
-	motionForm->addRow(QStringLiteral("動き判定感度"), sensitivitySpin_);
+	motionForm->addRow(QStringLiteral("静止と判断する時間"), inactivitySpin_);
+	motionForm->addRow(QStringLiteral("静止判定の感度"), sensitivitySpin_);
 	motionForm->addRow(QStringLiteral("最低録画時間"), minRecordingSpin_);
 
-	statusLabel_ = new QLabel(QStringLiteral("状態: 待機中"), this);
+	statusLabel_ = new QLabel(QStringLiteral("プラグインステータス: 待機中"), this);
 	elapsedLabel_ = new QLabel(QStringLiteral("経過時間: 0 / — 秒"), this);
 	motionLabel_ = new QLabel(QStringLiteral("静止時間: 0 / — 秒"), this);
 
@@ -170,13 +170,13 @@ void AutoStopDock::refreshStatus()
 	const auto maxSec = monitor_->maxRecordingDuration().count();
 
 	if (!monitor_->isEnabled()) {
-		statusLabel_->setText(QStringLiteral("状態: 自動停止 OFF"));
+		statusLabel_->setText(QStringLiteral("プラグインステータス: 録画の自動停止 OFF"));
 	} else if (monitor_->isRecording()) {
-		statusLabel_->setText(QStringLiteral("状態: 録画中"));
+		statusLabel_->setText(QStringLiteral("プラグインステータス: 録画中"));
 	} else if (stop_ && stop_->stopRequested()) {
-		statusLabel_->setText(QStringLiteral("状態: 自動停止要求中"));
+		statusLabel_->setText(QStringLiteral("プラグインステータス: 自動停止要求中"));
 	} else {
-		statusLabel_->setText(QStringLiteral("状態: 待機中"));
+		statusLabel_->setText(QStringLiteral("プラグインステータス: 待機中"));
 	}
 
 	if (maxSec > 0) {
