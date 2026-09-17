@@ -283,14 +283,14 @@ void AutoStopDock::refreshStatus()
 		if (motion_->isRegionEnabled()) {
 			int x, y, w, h;
 			motion_->regionPercent(x, y, w, h);
-			regionNote = QStringLiteral(" / 領域 %1%,%2% %3%x%4%%")
+			regionNote = QStringLiteral(" / 領域 %1%,%2% %3%x%4%")
 					     .arg(x)
 					     .arg(y)
 					     .arg(w)
 					     .arg(h);
 		}
 		motionLabel_->setText(
-			QStringLiteral("静止時間: %1 / %2 秒 (動き %.2f%%)%3")
+			QStringLiteral("静止時間: %1 / %2 秒 (動き %3%)%4")
 				.arg(static_cast<qlonglong>(still))
 				.arg(static_cast<qlonglong>(need))
 				.arg(motion_->lastMotionPercent(), 0, 'f', 2)
