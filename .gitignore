@@ -1,0 +1,30 @@
+# Build
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj.user
+*.user
+*.obj
+*.pdb
+*.ilk
+
+# VS Code
+.vscode/
+
+# CLion
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated binaries
+*.dll
+*.exe
+*.so
+*.dylib
