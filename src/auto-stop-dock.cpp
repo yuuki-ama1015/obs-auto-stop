@@ -77,7 +77,7 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	motionForm->addRow(QStringLiteral("静止判定の感度"), sensitivitySpin_);
 	motionForm->addRow(QStringLiteral("最低録画時間"), minRecordingSpin_);
 
-	regionCheck_ = new QCheckBox(QStringLiteral("監視領域を使う"), this);
+	regionCheck_ = new QCheckBox(QStringLiteral("監視領域を限定する"), this);
 	regionXSpin_ = new QSpinBox(this);
 	regionYSpin_ = new QSpinBox(this);
 	regionWSpin_ = new QSpinBox(this);
