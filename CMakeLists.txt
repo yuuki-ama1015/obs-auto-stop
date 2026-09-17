@@ -46,7 +46,11 @@ else()
         "${OBS_GENERATED_INCLUDE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
-    target_link_libraries(obs-auto-stop PRIVATE "${OBS_LIBOBS_LIBRARY}")
+    find_library(OBS_FRONTEND_API_LIBRARY NAMES obs-frontend-api HINTS ${_obs_build_hints} PATH_SUFFIXES libUI/obs-frontend-api lib)
+    if(NOT OBS_FRONTEND_API_LIBRARY)
+        find_library(OBS_FRONTEND_API_LIBRARY NAMES obs-frontend-api)
+    endif()
+    target_link_libraries(obs-auto-stop PRIVATE "${OBS_LIBOBS_LIBRARY}" ${OBS_FRONTEND_API_LIBRARY})
     set_target_properties(obs-auto-stop PROPERTIES
         PREFIX ""
         OUTPUT_NAME "obs-auto-stop"
