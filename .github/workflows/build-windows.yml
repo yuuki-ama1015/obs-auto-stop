@@ -20,6 +20,9 @@ on:
         required: false
         default: 2025-08-23
 
+permissions:
+  contents: write
+
 jobs:
   windows:
     name: Windows x64
