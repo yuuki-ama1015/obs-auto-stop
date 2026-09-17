@@ -10,7 +10,7 @@ on:
       attach_release:
         description: Release tag to attach the zip to (empty to skip)
         required: false
-        default: v0.1.0-pre-region
+        default: ''
       obs_ref:
         description: obs-studio ref
         required: false
@@ -94,14 +94,13 @@ jobs:
 
           $studio = "$root/obs-studio"
           $build = "$root/obs-build"
-          # Plugin/libobs expect generated obsconfig.h from the OBS build tree
           $genInc = "$build/config"
           if (-not (Test-Path "$genInc/obsconfig.h") -and -not (Test-Path "$genInc/obs-config.h")) {
             $found = Get-ChildItem -Recurse $build -Filter 'obsconfig.h' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $genInc = $found.DirectoryName -replace '\\', '/' }
+            if ($found) { $genInc = ($found.DirectoryName -replace '\\', '/') }
             else {
               $found2 = Get-ChildItem -Recurse $build -Filter 'obs-config.h' -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($found2) { $genInc = $found2.DirectoryName -replace '\\', '/' }
+              if ($found2) { $genInc = ($found2.DirectoryName -replace '\\', '/') }
               else { throw 'obsconfig.h / obs-config.h not found in obs-build' }
             }
           }
@@ -117,7 +116,6 @@ jobs:
           Write-Output "libInc=$libInc"
           Write-Output "genInc=$genInc"
           Write-Output "feInc=$feInc"
-          Write-Output "feLib=$($feLib.FullName)"
 
       - name: Configure plugin
         shell: pwsh
@@ -142,9 +140,6 @@ jobs:
           $build = ($env:OBS_BUILD -replace '\\', '/')
 
           $cmakePath = Join-Path $pwd 'plugin/CMakeLists.txt'
-          $cmake = Get-Content -Raw $cmakePath
-          $cmake = $cmake.Replace('find_path(OBS_LIBOBS_INCLUDE_DIR', "set(OBS_LIBOBS_INCLUDE_DIR `"$libInc`" CACHE PATH `"libobs include`" FORCE)`nfind_path(OBS_LIBOBS_INCLUDE_DIR_DISABLED")
-          # Safer: rewrite the four find_* blocks with explicit markers via line-based edit
           $lines = Get-Content $cmakePath
           $out = New-Object System.Collections.Generic.List[string]
           $i = 0
@@ -153,26 +148,22 @@ jobs:
             if ($line -match 'find_path\(OBS_LIBOBS_INCLUDE_DIR') {
               $out.Add("set(OBS_LIBOBS_INCLUDE_DIR `"$libInc`" CACHE PATH `"libobs include`" FORCE)")
               while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++
-              continue
+              $i++; continue
             }
             if ($line -match 'find_path\(OBS_GENERATED_INCLUDE_DIR') {
               $out.Add("set(OBS_GENERATED_INCLUDE_DIR `"$genInc`" CACHE PATH `"generated include`" FORCE)")
               while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++
-              continue
+              $i++; continue
             }
             if ($line -match 'find_library\(OBS_LIBOBS_LIBRARY') {
               $out.Add("set(OBS_LIBOBS_LIBRARY `"$dev/lib/obs.lib`" CACHE FILEPATH `"libobs`" FORCE)")
               while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++
-              continue
+              $i++; continue
             }
             if ($line -match 'find_library\(OBS_FRONTEND_API_LIBRARY') {
               $out.Add("set(OBS_FRONTEND_API_LIBRARY `"$dev/lib/obs-frontend-api.lib`" CACHE FILEPATH `"frontend-api`" FORCE)")
               while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++
-              continue
+              $i++; continue
             }
             if ($line -match 'target_include_directories\(obs-auto-stop PRIVATE') {
               $out.Add('target_include_directories(obs-auto-stop PRIVATE')
@@ -181,36 +172,24 @@ jobs:
               $out.Add("        `"$feInc`"")
               $out.Add(')')
               while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++
-              continue
+              $i++; continue
             }
             $out.Add($line)
             $i++
           }
-          [System.IO.File]::WriteAllLines($cmakePath, $out)
+          $cmakeText = ($out -join "`n")
+          if ($cmakeText -notmatch 'OBS_AUTOSTOP_WIN_EXPORTS') {
+            $cmakeText += "`n`n# OBS_AUTOSTOP_WIN_EXPORTS`nif(WIN32)`n  target_link_options(obs-auto-stop PRIVATE `"/EXPORT:obs_module_load`" `"/EXPORT:obs_module_unload`")`nendif()`n"
+          }
+          [System.IO.File]::WriteAllText($cmakePath, $cmakeText)
 
-          # MSVC sometimes drops OBS_DECLARE_MODULE exports if EXPORT macro is wrong;
-          # force dllexport on the module entrypoints for Windows.
           $mainPath = Join-Path $pwd 'plugin/src/plugin-main.cpp'
           $main = [System.IO.File]::ReadAllText($mainPath)
           if ($main -notmatch 'OBS_AUTOSTOP_DLL_EXPORT') {
-            $inject = @'
-#ifdef _WIN32
-#define OBS_AUTOSTOP_DLL_EXPORT __declspec(dllexport)
-#else
-#define OBS_AUTOSTOP_DLL_EXPORT
-#endif
-'@
-            $main = $main.Replace('bool obs_module_load(void)', "$inject`r`nOBS_AUTOSTOP_DLL_EXPORT bool obs_module_load(void)")
+            $decl = "#ifdef _WIN32`r`n#define OBS_AUTOSTOP_DLL_EXPORT __declspec(dllexport)`r`n#else`r`n#define OBS_AUTOSTOP_DLL_EXPORT`r`n#endif`r`n"
+            $main = $main.Replace('bool obs_module_load(void)', ($decl + 'OBS_AUTOSTOP_DLL_EXPORT bool obs_module_load(void)'))
             $main = $main.Replace('void obs_module_unload(void)', 'OBS_AUTOSTOP_DLL_EXPORT void obs_module_unload(void)')
             [System.IO.File]::WriteAllText($mainPath, $main)
-          }
-
-          # Also force linker exports as a belt-and-suspenders measure
-          $cmake2 = [System.IO.File]::ReadAllText($cmakePath)
-          if ($cmake2 -notmatch 'OBS_AUTOSTOP_WIN_EXPORTS') {
-            $cmake2 = $cmake2 + "`r`n`r`n# OBS_AUTOSTOP_WIN_EXPORTS`r`nif(WIN32)`r`n  target_link_options(obs-auto-stop PRIVATE `"/EXPORT:obs_module_load`" `"/EXPORT:obs_module_unload`")`r`nendif()`r`n"
-            [System.IO.File]::WriteAllText($cmakePath, $cmake2)
           }
 
           cmake -S plugin -B plugin-build -G "Visual Studio 17 2022" -A x64 `
@@ -224,7 +203,9 @@ jobs:
         run: |
           cmake --build plugin-build --config Release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem -Recurse plugin-build -Filter 'obs-auto-stop.dll' | Format-Table FullName, Length
+          $dll = Get-ChildItem -Recurse plugin-build -Filter 'obs-auto-stop.dll' | Select-Object -First 1
+          if (-not $dll) { throw 'obs-auto-stop.dll not found' }
+          Get-Item $dll.FullName | Format-List FullName, Length
 
       - name: Package zip
         shell: pwsh
