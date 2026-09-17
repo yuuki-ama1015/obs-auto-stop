@@ -38,9 +38,9 @@ Dock 名: **OBS Auto Stop**
 
 | ラベル | 意味 |
 | --- | --- |
-| 録画の自動停止 | 全体の ON/OFF |
+| タイマーによって自動で録画終了 | 録画タイマーによる自動停止の ON/OFF |
 | 録画タイマー | 最大録画時間（分）。0 で無効 |
-| 画面静止で録画終了 | 静止検出の ON/OFF |
+| 画面が一定時間静止したら自動で録画終了 | 静止検出の ON/OFF |
 | 静止と判断する時間 | 静止が続いたら停止するまでの秒数 |
 | 静止判定の感度 | 動きとみなすしきい値（%） |
 | 最低録画時間 | この時間までは静止停止しない（分） |
@@ -48,6 +48,25 @@ Dock 名: **OBS Auto Stop**
 | プラグインステータス | 待機中 / 録画中 など |
 | 経過時間 | 録画経過 / 録画タイマー上限 |
 | 静止時間 | 現在の静止継続 / 判定までの時間 |
+
+
+## インストール（Windows / OBS 32+）
+
+OBS 32 以降の推奨パスは **ProgramData** です（`%APPDATA%\obs-studio\plugins` は読まれません）。
+
+1. OBS を完全終了する
+2. 次の場所に配置する（フォルダ名と DLL 名を一致させる）:
+
+```
+C:\ProgramData\obs-studio\plugins\obs-auto-stop\
+  bin\64bit\obs-auto-stop.dll
+  data\locale\en-US.ini
+```
+
+3. OBS を起動し、メニュー「ドック」に **OBS Auto Stop** が出るか確認
+4. 出ない場合はヘルプ → ログファイルを確認し、`obs-auto-stop` / `OBS Auto Stop` の行を見る
+
+旧パス（動作しない）: `%APPDATA%\obs-studio\plugins\obs-auto-stop`
 
 ## ビルド
 
