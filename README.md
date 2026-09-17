@@ -2,14 +2,24 @@
 
 OBS Studio の録画を、次の条件で自動停止するための外部プラグインです。
 
-- 録画タイマー（最大録画時間）
-- 画面静止で録画終了（映像の静止検出）
+- **タイマーによって自動で録画終了**（最大録画時間）
+- **画面が一定時間静止したら自動で録画終了**（映像の静止検出）
 
 Status: Early development / experimental
 
 このプロジェクトは OBS Studio 本体を改造しません。OBS の公開 Plugin API を使う外部プラグインです。
 
 まだ実運用向けではありません。挙動は環境によって変わり得るため、重要な録画では十分に確認してから使ってください。
+
+English: External OBS Studio plugin that can auto-stop recording on a max timer and/or when the video stays still for a while. Early / experimental.
+
+## 配布（ダウンロード）
+
+最新の配布 zip は GitHub Releases にあります。
+
+- [v0.1.0-pre-region](https://github.com/yuuki-ama1015/obs-auto-stop/releases/tag/v0.1.0-pre-region)
+  - Windows: `obs-auto-stop-v0.1.0-pre-region-windows.zip`
+  - Linux: `obs-auto-stop-v0.1.0-pre-region-linux.zip`
 
 ## 実装済み
 
@@ -36,7 +46,7 @@ Status: Early development / experimental
 
 Dock 名: **OBS Auto Stop**
 
-| ラベル | 意味 |
+| 表示 | 意味 |
 | --- | --- |
 | タイマーによって自動で録画終了 | 録画タイマーによる自動停止の ON/OFF |
 | 録画タイマー | 最大録画時間（分）。0 で無効 |
@@ -49,13 +59,12 @@ Dock 名: **OBS Auto Stop**
 | 経過時間 | 録画経過 / 録画タイマー上限 |
 | 静止時間 | 現在の静止継続 / 判定までの時間 |
 
-
 ## インストール（Windows / OBS 32+）
 
 OBS 32 以降の推奨パスは **ProgramData** です（`%APPDATA%\obs-studio\plugins` は読まれません）。
 
 1. OBS を完全終了する
-2. 次の場所に配置する（フォルダ名と DLL 名を一致させる）:
+2. 配布 zip を展開し、次の場所に配置する（フォルダ名と DLL 名を一致させる）:
 
 ```
 C:\ProgramData\obs-studio\plugins\obs-auto-stop\
@@ -67,6 +76,19 @@ C:\ProgramData\obs-studio\plugins\obs-auto-stop\
 4. 出ない場合はヘルプ → ログファイルを確認し、`obs-auto-stop` / `OBS Auto Stop` の行を見る
 
 旧パス（動作しない）: `%APPDATA%\obs-studio\plugins\obs-auto-stop`
+
+## インストール（Linux）
+
+1. OBS を終了する
+2. 配布 zip を展開し、次の場所に配置する:
+
+```
+~/.config/obs-studio/plugins/obs-auto-stop/
+  bin/64bit/obs-auto-stop.so
+  data/locale/en-US.ini
+```
+
+3. OBS を起動し、ドックに **OBS Auto Stop** が出るか確認
 
 ## ビルド
 
