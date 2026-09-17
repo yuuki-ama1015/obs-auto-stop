@@ -43,6 +43,7 @@ elseif(NOT Qt6_FOUND AND NOT Qt5_FOUND)
 else()
     add_library(obs-auto-stop MODULE
         src/auto-stop-dock.cpp
+        src/region-select-dialog.cpp
         src/motion-detector.cpp
         src/plugin-main.cpp
         src/recording-monitor.cpp
