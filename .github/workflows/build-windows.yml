@@ -88,15 +88,21 @@ jobs:
           Copy-Item $obsLib "$dev/lib/obs.lib" -Force
 
           $feCandidates = @(
+            'obs-build/frontend/api/Release/obs-frontend-api.lib',
             'obs-build/UI/obs-frontend-api/Release/obs-frontend-api.lib',
             'obs-build/libUI/obs-frontend-api/Release/obs-frontend-api.lib',
             'obs-build/obs-frontend-api/Release/obs-frontend-api.lib'
           )
           $feLib = $feCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $feLib) {
-            Get-ChildItem -Recurse obs-build -Filter 'obs-frontend-api.lib' | Select-Object FullName
+            $found = Get-ChildItem -Recurse obs-build -Filter 'obs-frontend-api.lib' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $feLib = $found.FullName }
+          }
+          if (-not $feLib) {
+            Get-ChildItem -Recurse obs-build -Filter '*.lib' | Select-Object -First 40 FullName
             throw 'obs-frontend-api.lib not found'
           }
+          Write-Output "Using frontend-api: $feLib"
           Copy-Item $feLib "$dev/lib/obs-frontend-api.lib" -Force
 
           $pthreads = Get-ChildItem -Recurse obs-build/deps/w32-pthreads -Filter 'w32-pthreads.lib' -ErrorAction SilentlyContinue | Select-Object -First 1
