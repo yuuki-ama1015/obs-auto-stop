@@ -91,9 +91,17 @@ jobs:
 
           $studio = "$root/obs-studio"
           $build = "$root/obs-build"
-          # OBS 32 ships obs-config.h in source libobs/
-          $genInc = "$studio/libobs"
-          if (Test-Path "$build/config/obs-config.h") { $genInc = "$build/config" }
+          # Plugin/libobs expect generated obsconfig.h from the OBS build tree
+          $genInc = "$build/config"
+          if (-not (Test-Path "$genInc/obsconfig.h") -and -not (Test-Path "$genInc/obs-config.h")) {
+            $found = Get-ChildItem -Recurse $build -Filter 'obsconfig.h' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $genInc = $found.DirectoryName -replace '\\', '/' }
+            else {
+              $found2 = Get-ChildItem -Recurse $build -Filter 'obs-config.h' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found2) { $genInc = $found2.DirectoryName -replace '\\', '/' }
+              else { throw 'obsconfig.h / obs-config.h not found in obs-build' }
+            }
+          }
           $libInc = "$studio/libobs"
           $feInc = "$studio/frontend/api"
 
