@@ -189,6 +189,30 @@ jobs:
           }
           [System.IO.File]::WriteAllLines($cmakePath, $out)
 
+          # MSVC sometimes drops OBS_DECLARE_MODULE exports if EXPORT macro is wrong;
+          # force dllexport on the module entrypoints for Windows.
+          $mainPath = Join-Path $pwd 'plugin/src/plugin-main.cpp'
+          $main = [System.IO.File]::ReadAllText($mainPath)
+          if ($main -notmatch 'OBS_AUTOSTOP_DLL_EXPORT') {
+            $inject = @'
+#ifdef _WIN32
+#define OBS_AUTOSTOP_DLL_EXPORT __declspec(dllexport)
+#else
+#define OBS_AUTOSTOP_DLL_EXPORT
+#endif
+'@
+            $main = $main.Replace('bool obs_module_load(void)', "$inject`r`nOBS_AUTOSTOP_DLL_EXPORT bool obs_module_load(void)")
+            $main = $main.Replace('void obs_module_unload(void)', 'OBS_AUTOSTOP_DLL_EXPORT void obs_module_unload(void)')
+            [System.IO.File]::WriteAllText($mainPath, $main)
+          }
+
+          # Also force linker exports as a belt-and-suspenders measure
+          $cmake2 = [System.IO.File]::ReadAllText($cmakePath)
+          if ($cmake2 -notmatch 'OBS_AUTOSTOP_WIN_EXPORTS') {
+            $cmake2 = $cmake2 + "`r`n`r`n# OBS_AUTOSTOP_WIN_EXPORTS`r`nif(WIN32)`r`n  target_link_options(obs-auto-stop PRIVATE `"/EXPORT:obs_module_load`" `"/EXPORT:obs_module_unload`")`r`nendif()`r`n"
+            [System.IO.File]::WriteAllText($cmakePath, $cmake2)
+          }
+
           cmake -S plugin -B plugin-build -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_PREFIX_PATH="$qtRoot" `
             -DOBS_SOURCE_DIR="$studio" `
