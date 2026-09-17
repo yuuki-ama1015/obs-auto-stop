@@ -10,6 +10,7 @@
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QLabel>
 #include <QSpinBox>
 #include <QTimer>
@@ -25,6 +26,11 @@ constexpr const char *kKeyMotionEnabled = "MotionEnabled";
 constexpr const char *kKeyInactivitySec = "InactivitySeconds";
 constexpr const char *kKeySensitivity = "SensitivityPercent";
 constexpr const char *kKeyMinRecordingMin = "MinRecordingMinutes";
+constexpr const char *kKeyRegionEnabled = "RegionEnabled";
+constexpr const char *kKeyRegionX = "RegionXPercent";
+constexpr const char *kKeyRegionY = "RegionYPercent";
+constexpr const char *kKeyRegionW = "RegionWPercent";
+constexpr const char *kKeyRegionH = "RegionHPercent";
 constexpr int kDefaultMaxMinutes = 120;
 constexpr int kDefaultInactivitySec = 15;
 constexpr double kDefaultSensitivity = 2.0;
@@ -71,6 +77,28 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	motionForm->addRow(QStringLiteral("静止判定の感度"), sensitivitySpin_);
 	motionForm->addRow(QStringLiteral("最低録画時間"), minRecordingSpin_);
 
+	regionCheck_ = new QCheckBox(QStringLiteral("監視領域を使う"), this);
+	regionXSpin_ = new QSpinBox(this);
+	regionYSpin_ = new QSpinBox(this);
+	regionWSpin_ = new QSpinBox(this);
+	regionHSpin_ = new QSpinBox(this);
+	for (auto *spin : {regionXSpin_, regionYSpin_, regionWSpin_, regionHSpin_}) {
+		spin->setRange(0, 100);
+		spin->setSuffix(QStringLiteral(" %"));
+	}
+	regionWSpin_->setMinimum(1);
+	regionHSpin_->setMinimum(1);
+
+	auto *regionForm = new QFormLayout;
+	regionForm->setContentsMargins(0, 0, 0, 0);
+	regionForm->addRow(QStringLiteral("左"), regionXSpin_);
+	regionForm->addRow(QStringLiteral("上"), regionYSpin_);
+	regionForm->addRow(QStringLiteral("幅"), regionWSpin_);
+	regionForm->addRow(QStringLiteral("高さ"), regionHSpin_);
+
+	regionWidget_ = new QWidget(this);
+	regionWidget_->setLayout(regionForm);
+
 	statusLabel_ = new QLabel(QStringLiteral("プラグインステータス: 待機中"), this);
 	elapsedLabel_ = new QLabel(QStringLiteral("経過時間: 0 / — 秒"), this);
 	motionLabel_ = new QLabel(QStringLiteral("静止時間: 0 / — 秒"), this);
@@ -79,6 +107,8 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->addLayout(timerForm);
 	layout->addSpacing(6);
 	layout->addLayout(motionForm);
+	layout->addWidget(regionCheck_);
+	layout->addWidget(regionWidget_);
 	layout->addSpacing(6);
 	layout->addWidget(statusLabel_);
 	layout->addWidget(elapsedLabel_);
@@ -93,10 +123,21 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 		&AutoStopDock::onMotionToggled);
 	connect(inactivitySpin_, qOverload<int>(&QSpinBox::valueChanged), this,
 		&AutoStopDock::onInactivitySecondsChanged);
-	connect(sensitivitySpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
-		this, &AutoStopDock::onSensitivityChanged);
+	connect(sensitivitySpin_,
+		qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+		&AutoStopDock::onSensitivityChanged);
 	connect(minRecordingSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
 		&AutoStopDock::onMinRecordingMinutesChanged);
+	connect(regionCheck_, &QCheckBox::toggled, this,
+		&AutoStopDock::onRegionToggled);
+	connect(regionXSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+		&AutoStopDock::onRegionChanged);
+	connect(regionYSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+		&AutoStopDock::onRegionChanged);
+	connect(regionWSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+		&AutoStopDock::onRegionChanged);
+	connect(regionHSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+		&AutoStopDock::onRegionChanged);
 
 	refreshTimer_ = new QTimer(this);
 	refreshTimer_->setInterval(500);
@@ -160,6 +201,46 @@ void AutoStopDock::onMinRecordingMinutesChanged(int minutes)
 	saveSettings();
 }
 
+void AutoStopDock::onRegionToggled(bool enabled)
+{
+	if (motion_) {
+		motion_->setRegionEnabled(enabled);
+	}
+	updateRegionControlsEnabled();
+	saveSettings();
+}
+
+void AutoStopDock::onRegionChanged()
+{
+	if (motion_) {
+		motion_->setRegionPercent(regionXSpin_->value(),
+					  regionYSpin_->value(),
+					  regionWSpin_->value(),
+					  regionHSpin_->value());
+		int x, y, w, h;
+		motion_->regionPercent(x, y, w, h);
+		const bool blocked = regionXSpin_->blockSignals(true);
+		regionYSpin_->blockSignals(true);
+		regionWSpin_->blockSignals(true);
+		regionHSpin_->blockSignals(true);
+		regionXSpin_->setValue(x);
+		regionYSpin_->setValue(y);
+		regionWSpin_->setValue(w);
+		regionHSpin_->setValue(h);
+		regionXSpin_->blockSignals(blocked);
+		regionYSpin_->blockSignals(false);
+		regionWSpin_->blockSignals(false);
+		regionHSpin_->blockSignals(false);
+	}
+	saveSettings();
+}
+
+void AutoStopDock::updateRegionControlsEnabled()
+{
+	const bool on = regionCheck_->isChecked();
+	regionWidget_->setEnabled(on);
+}
+
 void AutoStopDock::refreshStatus()
 {
 	if (!monitor_) {
@@ -170,11 +251,13 @@ void AutoStopDock::refreshStatus()
 	const auto maxSec = monitor_->maxRecordingDuration().count();
 
 	if (!monitor_->isEnabled()) {
-		statusLabel_->setText(QStringLiteral("プラグインステータス: 録画の自動停止 OFF"));
+		statusLabel_->setText(
+			QStringLiteral("プラグインステータス: 録画の自動停止 OFF"));
 	} else if (monitor_->isRecording()) {
 		statusLabel_->setText(QStringLiteral("プラグインステータス: 録画中"));
 	} else if (stop_ && stop_->stopRequested()) {
-		statusLabel_->setText(QStringLiteral("プラグインステータス: 自動停止要求中"));
+		statusLabel_->setText(
+			QStringLiteral("プラグインステータス: 自動停止要求中"));
 	} else {
 		statusLabel_->setText(QStringLiteral("プラグインステータス: 待機中"));
 	}
@@ -193,11 +276,22 @@ void AutoStopDock::refreshStatus()
 	if (motion_ && motion_->isEnabled()) {
 		const auto still = motion_->stillnessDuration().count();
 		const auto need = motion_->inactivityDuration().count();
+		QString regionNote;
+		if (motion_->isRegionEnabled()) {
+			int x, y, w, h;
+			motion_->regionPercent(x, y, w, h);
+			regionNote = QStringLiteral(" / 領域 %1,%2 %3x%4%%")
+					     .arg(x)
+					     .arg(y)
+					     .arg(w)
+					     .arg(h);
+		}
 		motionLabel_->setText(
-			QStringLiteral("静止時間: %1 / %2 秒 (動き %.2f%%)")
+			QStringLiteral("静止時間: %1 / %2 秒 (動き %.2f%%)%3")
 				.arg(static_cast<qlonglong>(still))
 				.arg(static_cast<qlonglong>(need))
-				.arg(motion_->lastMotionPercent(), 0, 'f', 2));
+				.arg(motion_->lastMotionPercent(), 0, 'f', 2)
+				.arg(regionNote));
 	} else {
 		motionLabel_->setText(QStringLiteral("静止時間: —"));
 	}
@@ -214,6 +308,11 @@ void AutoStopDock::loadSettings()
 		inactivitySpin_->setValue(kDefaultInactivitySec);
 		sensitivitySpin_->setValue(kDefaultSensitivity);
 		minRecordingSpin_->setValue(kDefaultMinRecordingMin);
+		regionCheck_->setChecked(false);
+		regionXSpin_->setValue(0);
+		regionYSpin_->setValue(0);
+		regionWSpin_->setValue(100);
+		regionHSpin_->setValue(100);
 		if (monitor_) {
 			monitor_->setEnabled(true);
 			monitor_->setMaxRecordingDuration(
@@ -227,11 +326,14 @@ void AutoStopDock::loadSettings()
 			motion_->setMinimumRecordingDuration(
 				std::chrono::seconds{kDefaultMinRecordingMin *
 						     60});
+			motion_->setRegionEnabled(false);
+			motion_->setRegionPercent(0, 0, 100, 100);
 		}
 	};
 
 	if (!config) {
 		applyDefaults();
+		updateRegionControlsEnabled();
 		return;
 	}
 
@@ -246,8 +348,15 @@ void AutoStopDock::loadSettings()
 				  kDefaultSensitivity);
 	config_set_default_int(config, kConfigSection, kKeyMinRecordingMin,
 			       kDefaultMinRecordingMin);
+	config_set_default_bool(config, kConfigSection, kKeyRegionEnabled,
+				false);
+	config_set_default_int(config, kConfigSection, kKeyRegionX, 0);
+	config_set_default_int(config, kConfigSection, kKeyRegionY, 0);
+	config_set_default_int(config, kConfigSection, kKeyRegionW, 100);
+	config_set_default_int(config, kConfigSection, kKeyRegionH, 100);
 
-	const bool enabled = config_get_bool(config, kConfigSection, kKeyEnabled);
+	const bool enabled =
+		config_get_bool(config, kConfigSection, kKeyEnabled);
 	int minutes = static_cast<int>(
 		config_get_int(config, kConfigSection, kKeyMaxMinutes));
 	const bool motionEnabled =
@@ -258,6 +367,16 @@ void AutoStopDock::loadSettings()
 		config_get_double(config, kConfigSection, kKeySensitivity);
 	int minRecMin = static_cast<int>(
 		config_get_int(config, kConfigSection, kKeyMinRecordingMin));
+	const bool regionEnabled =
+		config_get_bool(config, kConfigSection, kKeyRegionEnabled);
+	int rx = static_cast<int>(
+		config_get_int(config, kConfigSection, kKeyRegionX));
+	int ry = static_cast<int>(
+		config_get_int(config, kConfigSection, kKeyRegionY));
+	int rw = static_cast<int>(
+		config_get_int(config, kConfigSection, kKeyRegionW));
+	int rh = static_cast<int>(
+		config_get_int(config, kConfigSection, kKeyRegionH));
 
 	if (minutes < 0)
 		minutes = 0;
@@ -274,6 +393,11 @@ void AutoStopDock::loadSettings()
 	const bool old4 = inactivitySpin_->blockSignals(true);
 	const bool old5 = sensitivitySpin_->blockSignals(true);
 	const bool old6 = minRecordingSpin_->blockSignals(true);
+	const bool old7 = regionCheck_->blockSignals(true);
+	const bool old8 = regionXSpin_->blockSignals(true);
+	const bool old9 = regionYSpin_->blockSignals(true);
+	const bool old10 = regionWSpin_->blockSignals(true);
+	const bool old11 = regionHSpin_->blockSignals(true);
 
 	autoStopCheck_->setChecked(enabled);
 	maxMinutesSpin_->setValue(minutes);
@@ -281,6 +405,11 @@ void AutoStopDock::loadSettings()
 	inactivitySpin_->setValue(inactivity);
 	sensitivitySpin_->setValue(sensitivity);
 	minRecordingSpin_->setValue(minRecMin);
+	regionCheck_->setChecked(regionEnabled);
+	regionXSpin_->setValue(rx);
+	regionYSpin_->setValue(ry);
+	regionWSpin_->setValue(rw);
+	regionHSpin_->setValue(rh);
 
 	autoStopCheck_->blockSignals(old1);
 	maxMinutesSpin_->blockSignals(old2);
@@ -288,6 +417,11 @@ void AutoStopDock::loadSettings()
 	inactivitySpin_->blockSignals(old4);
 	sensitivitySpin_->blockSignals(old5);
 	minRecordingSpin_->blockSignals(old6);
+	regionCheck_->blockSignals(old7);
+	regionXSpin_->blockSignals(old8);
+	regionYSpin_->blockSignals(old9);
+	regionWSpin_->blockSignals(old10);
+	regionHSpin_->blockSignals(old11);
 
 	if (monitor_) {
 		monitor_->setEnabled(enabled);
@@ -296,13 +430,16 @@ void AutoStopDock::loadSettings()
 	}
 	if (motion_) {
 		motion_->setEnabled(motionEnabled);
-		motion_->setInactivityDuration(
-			std::chrono::seconds{inactivity});
+		motion_->setInactivityDuration(std::chrono::seconds{inactivity});
 		motion_->setSensitivityPercent(sensitivity);
 		motion_->setMinimumRecordingDuration(
 			std::chrono::seconds{static_cast<int64_t>(minRecMin) *
 					     60});
+		motion_->setRegionEnabled(regionEnabled);
+		motion_->setRegionPercent(rx, ry, rw, rh);
 	}
+
+	updateRegionControlsEnabled();
 }
 
 void AutoStopDock::saveSettings() const
@@ -323,5 +460,15 @@ void AutoStopDock::saveSettings() const
 			  sensitivitySpin_->value());
 	config_set_int(config, kConfigSection, kKeyMinRecordingMin,
 		       minRecordingSpin_->value());
+	config_set_bool(config, kConfigSection, kKeyRegionEnabled,
+			regionCheck_->isChecked());
+	config_set_int(config, kConfigSection, kKeyRegionX,
+		       regionXSpin_->value());
+	config_set_int(config, kConfigSection, kKeyRegionY,
+		       regionYSpin_->value());
+	config_set_int(config, kConfigSection, kKeyRegionW,
+		       regionWSpin_->value());
+	config_set_int(config, kConfigSection, kKeyRegionH,
+		       regionHSpin_->value());
 	config_save_safe(config, "tmp", nullptr);
 }
