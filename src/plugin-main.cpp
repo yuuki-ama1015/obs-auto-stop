@@ -19,6 +19,39 @@ MotionDetector g_motion;
 StopController g_stop;
 AutoStopDock *g_dock = nullptr;
 
+// Remember OBS_AUTOSTOP_* env overrides so they can win over profile
+// loadSettings() which runs later when the dock is created.
+struct EnvOverrides {
+	bool max_seconds = false;
+	int max_seconds_val = 0;
+	bool inactivity_seconds = false;
+	int inactivity_seconds_val = 0;
+	bool min_recording_seconds = false;
+	int min_recording_seconds_val = 0;
+	bool motion = false;
+	bool motion_enabled = false;
+} g_env;
+
+void applyEnvOverrides()
+{
+	// Re-apply after AutoStopDock::loadSettings() so env beats profile.
+	if (g_env.max_seconds) {
+		g_monitor.setMaxRecordingDuration(
+			std::chrono::seconds{g_env.max_seconds_val});
+	}
+	if (g_env.inactivity_seconds) {
+		g_motion.setInactivityDuration(
+			std::chrono::seconds{g_env.inactivity_seconds_val});
+	}
+	if (g_env.min_recording_seconds) {
+		g_motion.setMinimumRecordingDuration(
+			std::chrono::seconds{g_env.min_recording_seconds_val});
+	}
+	if (g_env.motion) {
+		g_motion.setEnabled(g_env.motion_enabled);
+	}
+}
+
 void onFrontendEvent(enum obs_frontend_event event, void *)
 {
 	g_monitor.onFrontendEvent(static_cast<int>(event));
@@ -34,6 +67,9 @@ void onFrontendEvent(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 		if (!g_dock) {
 			g_dock = new AutoStopDock(&g_monitor, &g_motion, &g_stop);
+			// Dock ctor calls loadSettings() and would clobber env;
+			// re-apply so OBS_AUTOSTOP_* still wins when set.
+			applyEnvOverrides();
 			obs_frontend_add_dock_by_id("obs-auto-stop-dock",
 						    "OBS Auto Stop", g_dock);
 			blog(LOG_INFO, "OBS Auto Stop: dock registered");
@@ -83,8 +119,8 @@ bool obs_module_load(void)
 
 	int override_seconds = 0;
 	if (envLong("OBS_AUTOSTOP_MAX_SECONDS", &override_seconds) == 0) {
-		g_monitor.setMaxRecordingDuration(
-			std::chrono::seconds{override_seconds});
+		g_env.max_seconds = true;
+		g_env.max_seconds_val = override_seconds;
 		blog(LOG_INFO,
 		     "OBS Auto Stop: max recording duration overridden to %d s (OBS_AUTOSTOP_MAX_SECONDS)",
 		     override_seconds);
@@ -92,8 +128,8 @@ bool obs_module_load(void)
 
 	if (envLong("OBS_AUTOSTOP_INACTIVITY_SECONDS", &override_seconds) ==
 	    0) {
-		g_motion.setInactivityDuration(
-			std::chrono::seconds{override_seconds});
+		g_env.inactivity_seconds = true;
+		g_env.inactivity_seconds_val = override_seconds;
 		blog(LOG_INFO,
 		     "OBS Auto Stop: inactivity duration overridden to %d s (OBS_AUTOSTOP_INACTIVITY_SECONDS)",
 		     override_seconds);
@@ -101,8 +137,8 @@ bool obs_module_load(void)
 
 	if (envLong("OBS_AUTOSTOP_MIN_RECORDING_SECONDS", &override_seconds) ==
 	    0) {
-		g_motion.setMinimumRecordingDuration(
-			std::chrono::seconds{override_seconds});
+		g_env.min_recording_seconds = true;
+		g_env.min_recording_seconds_val = override_seconds;
 		blog(LOG_INFO,
 		     "OBS Auto Stop: min recording duration overridden to %d s",
 		     override_seconds);
@@ -112,10 +148,13 @@ bool obs_module_load(void)
 		const bool on = motion_env[0] == '1' || motion_env[0] == 't' ||
 				motion_env[0] == 'T' || motion_env[0] == 'y' ||
 				motion_env[0] == 'Y';
-		g_motion.setEnabled(on);
+		g_env.motion = true;
+		g_env.motion_enabled = on;
 		blog(LOG_INFO, "OBS Auto Stop: motion detection %s (OBS_AUTOSTOP_MOTION)",
 		     on ? "enabled" : "disabled");
 	}
+
+	applyEnvOverrides();
 
 	obs_frontend_add_event_callback(onFrontendEvent, nullptr);
 	obs_add_tick_callback(onTick, nullptr);
