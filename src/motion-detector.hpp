@@ -58,6 +58,7 @@ public:
 private:
 	void ensureCallbackRegistered();
 	void ensureCallbackRemoved();
+	static void rawVideoCallback(void *param, struct video_data *frame);
 	void resetStillness();
 	void clearPreviousFrame();
 	void clampRegion();
