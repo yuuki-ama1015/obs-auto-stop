@@ -14,6 +14,7 @@
 #include <QDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QSpinBox>
@@ -94,20 +95,36 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	motionForm->addRow(QStringLiteral("静止判定の感度"), sensitivitySpin_);
 	motionForm->addRow(QStringLiteral("最低録画時間"), minRecordingSpin_);
 
-	regionCheck_ = new QCheckBox(QStringLiteral("監視領域を限定する"), this);
+	regionCheck_ = new QCheckBox(
+		QStringLiteral("└ 監視領域を限定する（静止検出のオプション）"), this);
+	regionCheck_->setToolTip(QStringLiteral(
+		"「画面が一定時間静止したら自動で録画終了」がONのときだけ有効です"));
 	selectRegionButton_ =
 		new QPushButton(QStringLiteral("領域を選択"), this);
 	regionStatusLabel_ = new QLabel(this);
 	regionStatusLabel_->setWordWrap(true);
 
-	auto *regionForm = new QVBoxLayout;
-	regionForm->setContentsMargins(0, 0, 0, 0);
-	regionForm->setSpacing(4);
-	regionForm->addWidget(selectRegionButton_);
-	regionForm->addWidget(regionStatusLabel_);
+	auto *regionInner = new QVBoxLayout;
+	regionInner->setContentsMargins(0, 0, 0, 0);
+	regionInner->setSpacing(4);
+	regionInner->addWidget(selectRegionButton_);
+	regionInner->addWidget(regionStatusLabel_);
+
+	auto *regionControls = new QWidget(this);
+	regionControls->setLayout(regionInner);
+
+	auto *regionIndent = new QHBoxLayout;
+	regionIndent->setContentsMargins(24, 0, 0, 0);
+	regionIndent->setSpacing(4);
+	auto *regionColumn = new QVBoxLayout;
+	regionColumn->setContentsMargins(0, 0, 0, 0);
+	regionColumn->setSpacing(4);
+	regionColumn->addWidget(regionCheck_);
+	regionColumn->addWidget(regionControls);
+	regionIndent->addLayout(regionColumn);
 
 	regionWidget_ = new QWidget(this);
-	regionWidget_->setLayout(regionForm);
+	regionWidget_->setLayout(regionIndent);
 
 	mediaEndCheck_ = new QCheckBox(
 		QStringLiteral("メディアソースの再生が終わったら自動で録画終了"), this);
@@ -138,14 +155,15 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	mediaLabel_ = new QLabel(QStringLiteral("メディア終了: —"), this);
 	silenceLabel_ = new QLabel(QStringLiteral("無音時間: —"), this);
 
+	// Order: media end → timer → motion (+ nested region) → silence → status
+	layout->addWidget(mediaEndCheck_);
+	layout->addSpacing(6);
 	layout->addWidget(autoStopCheck_);
 	layout->addLayout(timerForm);
 	layout->addSpacing(6);
 	layout->addLayout(motionForm);
-	layout->addWidget(regionCheck_);
 	layout->addWidget(regionWidget_);
 	layout->addSpacing(6);
-	layout->addWidget(mediaEndCheck_);
 	layout->addLayout(silenceForm);
 	layout->addSpacing(6);
 	layout->addWidget(statusLabel_);
@@ -216,6 +234,7 @@ void AutoStopDock::onMotionToggled(bool enabled)
 	if (motion_) {
 		motion_->setEnabled(enabled);
 	}
+	updateRegionControlsEnabled();
 	saveSettings();
 }
 
@@ -327,9 +346,13 @@ void AutoStopDock::onSelectRegionClicked()
 
 void AutoStopDock::updateRegionControlsEnabled()
 {
-	const bool on = regionCheck_->isChecked();
-	regionWidget_->setEnabled(on);
-	selectRegionButton_->setEnabled(on);
+	const bool motionOn = motionCheck_ && motionCheck_->isChecked();
+	const bool regionOn = regionCheck_ && regionCheck_->isChecked();
+	// Region is a sub-option of stillness detection.
+	regionCheck_->setEnabled(motionOn);
+	const bool controlsOn = motionOn && regionOn;
+	selectRegionButton_->setEnabled(controlsOn);
+	regionStatusLabel_->setEnabled(controlsOn);
 }
 
 void AutoStopDock::updateRegionStatusLabel()
