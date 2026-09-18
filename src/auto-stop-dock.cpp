@@ -1,6 +1,8 @@
 #include "auto-stop-dock.hpp"
 
 #include "motion-detector.hpp"
+#include "media-end-watcher.hpp"
+#include "silence-detector.hpp"
 #include "recording-monitor.hpp"
 #include "region-select-dialog.hpp"
 #include "stop-controller.hpp"
@@ -19,6 +21,7 @@
 #include <QVBoxLayout>
 
 #include <chrono>
+#include <string>
 
 namespace {
 constexpr const char *kConfigSection = "ObsAutoStop";
@@ -33,15 +36,27 @@ constexpr const char *kKeyRegionX = "RegionXPercent";
 constexpr const char *kKeyRegionY = "RegionYPercent";
 constexpr const char *kKeyRegionW = "RegionWPercent";
 constexpr const char *kKeyRegionH = "RegionHPercent";
+constexpr const char *kKeyMediaEndEnabled = "MediaEndEnabled";
+constexpr const char *kKeySilenceEnabled = "SilenceEnabled";
+constexpr const char *kKeySilenceSec = "SilenceSeconds";
+constexpr const char *kKeySilenceThresholdDb = "SilenceThresholdDb";
 constexpr int kDefaultMaxMinutes = 120;
 constexpr int kDefaultInactivitySec = 15;
 constexpr double kDefaultSensitivity = 0.5;
 constexpr int kDefaultMinRecordingMin = 5;
+constexpr int kDefaultSilenceSec = 15;
+constexpr double kDefaultSilenceThresholdDb = -50.0;
 } // namespace
 
 AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
+			   MediaEndWatcher *media, SilenceDetector *silence,
 			   StopController *stop, QWidget *parent)
-	: QWidget(parent), monitor_(monitor), motion_(motion), stop_(stop)
+	: QWidget(parent),
+	  monitor_(monitor),
+	  motion_(motion),
+	  media_(media),
+	  silence_(silence),
+	  stop_(stop)
 {
 	setObjectName("obsAutoStopDock");
 
@@ -94,9 +109,34 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	regionWidget_ = new QWidget(this);
 	regionWidget_->setLayout(regionForm);
 
+	mediaEndCheck_ = new QCheckBox(
+		QStringLiteral("メディアソースの再生が終わったら自動で録画終了"), this);
+	mediaEndCheck_->setToolTip(QStringLiteral(
+		"ループOFFのメディアソースが終了したら録画を停止します"));
+
+	silenceCheck_ = new QCheckBox(
+		QStringLiteral("一定時間無音なら自動で録画終了"), this);
+	silenceSpin_ = new QSpinBox(this);
+	silenceSpin_->setRange(1, 600);
+	silenceSpin_->setSuffix(QStringLiteral(" 秒"));
+	silenceThresholdSpin_ = new QDoubleSpinBox(this);
+	silenceThresholdSpin_->setRange(-100.0, 0.0);
+	silenceThresholdSpin_->setSingleStep(1.0);
+	silenceThresholdSpin_->setSuffix(QStringLiteral(" dB"));
+	silenceThresholdSpin_->setToolTip(
+		QStringLiteral("これ以下のピークレベルを無音とみなします（dBFS）"));
+
+	auto *silenceForm = new QFormLayout;
+	silenceForm->setContentsMargins(0, 0, 0, 0);
+	silenceForm->addRow(silenceCheck_);
+	silenceForm->addRow(QStringLiteral("無音と判断する時間"), silenceSpin_);
+	silenceForm->addRow(QStringLiteral("無音しきい値"), silenceThresholdSpin_);
+
 	statusLabel_ = new QLabel(QStringLiteral("プラグインステータス: 待機中"), this);
 	elapsedLabel_ = new QLabel(QStringLiteral("経過時間: 0 / — 秒"), this);
 	motionLabel_ = new QLabel(QStringLiteral("静止時間: 0 / — 秒"), this);
+	mediaLabel_ = new QLabel(QStringLiteral("メディア終了: —"), this);
+	silenceLabel_ = new QLabel(QStringLiteral("無音時間: —"), this);
 
 	layout->addWidget(autoStopCheck_);
 	layout->addLayout(timerForm);
@@ -105,9 +145,14 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->addWidget(regionCheck_);
 	layout->addWidget(regionWidget_);
 	layout->addSpacing(6);
+	layout->addWidget(mediaEndCheck_);
+	layout->addLayout(silenceForm);
+	layout->addSpacing(6);
 	layout->addWidget(statusLabel_);
 	layout->addWidget(elapsedLabel_);
 	layout->addWidget(motionLabel_);
+	layout->addWidget(mediaLabel_);
+	layout->addWidget(silenceLabel_);
 	layout->addStretch(1);
 
 	connect(autoStopCheck_, &QCheckBox::toggled, this,
@@ -127,6 +172,15 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 		&AutoStopDock::onRegionToggled);
 	connect(selectRegionButton_, &QPushButton::clicked, this,
 		&AutoStopDock::onSelectRegionClicked);
+	connect(mediaEndCheck_, &QCheckBox::toggled, this,
+		&AutoStopDock::onMediaEndToggled);
+	connect(silenceCheck_, &QCheckBox::toggled, this,
+		&AutoStopDock::onSilenceToggled);
+	connect(silenceSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+		&AutoStopDock::onSilenceSecondsChanged);
+	connect(silenceThresholdSpin_,
+		qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+		&AutoStopDock::onSilenceThresholdChanged);
 
 	refreshTimer_ = new QTimer(this);
 	refreshTimer_->setInterval(500);
@@ -181,11 +235,55 @@ void AutoStopDock::onSensitivityChanged(double percent)
 	saveSettings();
 }
 
+void AutoStopDock::applyMinRecordingToAll(int minutes)
+{
+	const auto dur =
+		std::chrono::seconds{static_cast<int64_t>(minutes) * 60};
+	if (motion_) {
+		motion_->setMinimumRecordingDuration(dur);
+	}
+	if (media_) {
+		media_->setMinimumRecordingDuration(dur);
+	}
+	if (silence_) {
+		silence_->setMinimumRecordingDuration(dur);
+	}
+}
+
 void AutoStopDock::onMinRecordingMinutesChanged(int minutes)
 {
-	if (motion_) {
-		motion_->setMinimumRecordingDuration(
-			std::chrono::seconds{static_cast<int64_t>(minutes) * 60});
+	applyMinRecordingToAll(minutes);
+	saveSettings();
+}
+
+void AutoStopDock::onMediaEndToggled(bool enabled)
+{
+	if (media_) {
+		media_->setEnabled(enabled);
+	}
+	saveSettings();
+}
+
+void AutoStopDock::onSilenceToggled(bool enabled)
+{
+	if (silence_) {
+		silence_->setEnabled(enabled);
+	}
+	saveSettings();
+}
+
+void AutoStopDock::onSilenceSecondsChanged(int seconds)
+{
+	if (silence_) {
+		silence_->setSilenceDuration(std::chrono::seconds{seconds});
+	}
+	saveSettings();
+}
+
+void AutoStopDock::onSilenceThresholdChanged(double db)
+{
+	if (silence_) {
+		silence_->setThresholdDb(db);
 	}
 	saveSettings();
 }
@@ -298,6 +396,31 @@ void AutoStopDock::refreshStatus()
 	} else {
 		motionLabel_->setText(QStringLiteral("静止時間: —"));
 	}
+
+	if (media_ && media_->isEnabled()) {
+		const auto name = media_->endedSourceName();
+		if (!name.empty()) {
+			mediaLabel_->setText(
+				QStringLiteral("メディア終了: 検知 (%1)")
+					.arg(QString::fromStdString(name)));
+		} else {
+			mediaLabel_->setText(QStringLiteral("メディア終了: 監視中"));
+		}
+	} else {
+		mediaLabel_->setText(QStringLiteral("メディア終了: —"));
+	}
+
+	if (silence_ && silence_->isEnabled()) {
+		const auto still = silence_->silenceActiveDuration().count();
+		const auto need = silence_->silenceDuration().count();
+		silenceLabel_->setText(
+			QStringLiteral("無音時間: %1 / %2 秒 (レベル %3 dB)")
+				.arg(static_cast<qlonglong>(still))
+				.arg(static_cast<qlonglong>(need))
+				.arg(silence_->lastLevelDb(), 0, 'f', 1));
+	} else {
+		silenceLabel_->setText(QStringLiteral("無音時間: —"));
+	}
 }
 
 void AutoStopDock::loadSettings()
@@ -316,6 +439,10 @@ void AutoStopDock::loadSettings()
 		regionY_ = 0;
 		regionW_ = 100;
 		regionH_ = 100;
+		mediaEndCheck_->setChecked(false);
+		silenceCheck_->setChecked(false);
+		silenceSpin_->setValue(kDefaultSilenceSec);
+		silenceThresholdSpin_->setValue(kDefaultSilenceThresholdDb);
 		if (monitor_) {
 			monitor_->setEnabled(true);
 			monitor_->setMaxRecordingDuration(
@@ -331,6 +458,21 @@ void AutoStopDock::loadSettings()
 						     60});
 			motion_->setRegionEnabled(false);
 			motion_->setRegionPercent(0, 0, 100, 100);
+		}
+		if (media_) {
+			media_->setEnabled(false);
+			media_->setMinimumRecordingDuration(
+				std::chrono::seconds{kDefaultMinRecordingMin *
+						     60});
+		}
+		if (silence_) {
+			silence_->setEnabled(false);
+			silence_->setSilenceDuration(
+				std::chrono::seconds{kDefaultSilenceSec});
+			silence_->setThresholdDb(kDefaultSilenceThresholdDb);
+			silence_->setMinimumRecordingDuration(
+				std::chrono::seconds{kDefaultMinRecordingMin *
+						     60});
 		}
 	};
 
@@ -358,6 +500,15 @@ void AutoStopDock::loadSettings()
 	config_set_default_int(config, kConfigSection, kKeyRegionY, 0);
 	config_set_default_int(config, kConfigSection, kKeyRegionW, 100);
 	config_set_default_int(config, kConfigSection, kKeyRegionH, 100);
+	config_set_default_bool(config, kConfigSection, kKeyMediaEndEnabled,
+				false);
+	config_set_default_bool(config, kConfigSection, kKeySilenceEnabled,
+				false);
+	config_set_default_int(config, kConfigSection, kKeySilenceSec,
+			       kDefaultSilenceSec);
+	config_set_default_double(config, kConfigSection,
+				  kKeySilenceThresholdDb,
+				  kDefaultSilenceThresholdDb);
 
 	const bool enabled =
 		config_get_bool(config, kConfigSection, kKeyEnabled);
@@ -381,6 +532,14 @@ void AutoStopDock::loadSettings()
 		config_get_int(config, kConfigSection, kKeyRegionW));
 	int rh = static_cast<int>(
 		config_get_int(config, kConfigSection, kKeyRegionH));
+	const bool mediaEndEnabled =
+		config_get_bool(config, kConfigSection, kKeyMediaEndEnabled);
+	const bool silenceEnabled =
+		config_get_bool(config, kConfigSection, kKeySilenceEnabled);
+	int silenceSec = static_cast<int>(
+		config_get_int(config, kConfigSection, kKeySilenceSec));
+	const double silenceDb = config_get_double(
+		config, kConfigSection, kKeySilenceThresholdDb);
 
 	if (minutes < 0)
 		minutes = 0;
@@ -390,6 +549,8 @@ void AutoStopDock::loadSettings()
 		inactivity = 1;
 	if (minRecMin < 0)
 		minRecMin = 0;
+	if (silenceSec < 1)
+		silenceSec = 1;
 
 	const bool old1 = autoStopCheck_->blockSignals(true);
 	const bool old2 = maxMinutesSpin_->blockSignals(true);
@@ -398,6 +559,10 @@ void AutoStopDock::loadSettings()
 	const bool old5 = sensitivitySpin_->blockSignals(true);
 	const bool old6 = minRecordingSpin_->blockSignals(true);
 	const bool old7 = regionCheck_->blockSignals(true);
+	const bool old8 = mediaEndCheck_->blockSignals(true);
+	const bool old9 = silenceCheck_->blockSignals(true);
+	const bool old10 = silenceSpin_->blockSignals(true);
+	const bool old11 = silenceThresholdSpin_->blockSignals(true);
 
 	autoStopCheck_->setChecked(enabled);
 	maxMinutesSpin_->setValue(minutes);
@@ -410,6 +575,10 @@ void AutoStopDock::loadSettings()
 	regionY_ = ry;
 	regionW_ = rw;
 	regionH_ = rh;
+	mediaEndCheck_->setChecked(mediaEndEnabled);
+	silenceCheck_->setChecked(silenceEnabled);
+	silenceSpin_->setValue(silenceSec);
+	silenceThresholdSpin_->setValue(silenceDb);
 
 	autoStopCheck_->blockSignals(old1);
 	maxMinutesSpin_->blockSignals(old2);
@@ -418,6 +587,10 @@ void AutoStopDock::loadSettings()
 	sensitivitySpin_->blockSignals(old5);
 	minRecordingSpin_->blockSignals(old6);
 	regionCheck_->blockSignals(old7);
+	mediaEndCheck_->blockSignals(old8);
+	silenceCheck_->blockSignals(old9);
+	silenceSpin_->blockSignals(old10);
+	silenceThresholdSpin_->blockSignals(old11);
 
 	if (monitor_) {
 		monitor_->setEnabled(enabled);
@@ -434,6 +607,20 @@ void AutoStopDock::loadSettings()
 		motion_->setRegionEnabled(regionEnabled);
 		motion_->setRegionPercent(rx, ry, rw, rh);
 		motion_->regionPercent(regionX_, regionY_, regionW_, regionH_);
+	}
+	if (media_) {
+		media_->setEnabled(mediaEndEnabled);
+		media_->setMinimumRecordingDuration(
+			std::chrono::seconds{static_cast<int64_t>(minRecMin) *
+					     60});
+	}
+	if (silence_) {
+		silence_->setEnabled(silenceEnabled);
+		silence_->setSilenceDuration(std::chrono::seconds{silenceSec});
+		silence_->setThresholdDb(silenceDb);
+		silence_->setMinimumRecordingDuration(
+			std::chrono::seconds{static_cast<int64_t>(minRecMin) *
+					     60});
 	}
 
 	updateRegionStatusLabel();
@@ -464,5 +651,13 @@ void AutoStopDock::saveSettings() const
 	config_set_int(config, kConfigSection, kKeyRegionY, regionY_);
 	config_set_int(config, kConfigSection, kKeyRegionW, regionW_);
 	config_set_int(config, kConfigSection, kKeyRegionH, regionH_);
+	config_set_bool(config, kConfigSection, kKeyMediaEndEnabled,
+			mediaEndCheck_->isChecked());
+	config_set_bool(config, kConfigSection, kKeySilenceEnabled,
+			silenceCheck_->isChecked());
+	config_set_int(config, kConfigSection, kKeySilenceSec,
+		       silenceSpin_->value());
+	config_set_double(config, kConfigSection, kKeySilenceThresholdDb,
+			  silenceThresholdSpin_->value());
 	config_save_safe(config, "tmp", nullptr);
 }

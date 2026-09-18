@@ -3,6 +3,8 @@
 
 #include "auto-stop-dock.hpp"
 #include "motion-detector.hpp"
+#include "media-end-watcher.hpp"
+#include "silence-detector.hpp"
 #include "recording-monitor.hpp"
 #include "stop-controller.hpp"
 
@@ -16,6 +18,8 @@ namespace {
 
 RecordingMonitor g_monitor;
 MotionDetector g_motion;
+MediaEndWatcher g_media;
+SilenceDetector g_silence;
 StopController g_stop;
 AutoStopDock *g_dock = nullptr;
 
@@ -44,8 +48,11 @@ void applyEnvOverrides()
 			std::chrono::seconds{g_env.inactivity_seconds_val});
 	}
 	if (g_env.min_recording_seconds) {
-		g_motion.setMinimumRecordingDuration(
-			std::chrono::seconds{g_env.min_recording_seconds_val});
+		const auto dur =
+			std::chrono::seconds{g_env.min_recording_seconds_val};
+		g_motion.setMinimumRecordingDuration(dur);
+		g_media.setMinimumRecordingDuration(dur);
+		g_silence.setMinimumRecordingDuration(dur);
 	}
 	if (g_env.motion) {
 		g_motion.setEnabled(g_env.motion_enabled);
@@ -59,14 +66,19 @@ void onFrontendEvent(enum obs_frontend_event event, void *)
 	switch (event) {
 	case OBS_FRONTEND_EVENT_RECORDING_STARTED:
 		g_motion.onRecordingStarted();
+		g_media.onRecordingStarted();
+		g_silence.onRecordingStarted();
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STOPPED:
 		g_motion.onRecordingStopped();
+		g_media.onRecordingStopped();
+		g_silence.onRecordingStopped();
 		g_stop.clearStopRequested();
 		break;
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 		if (!g_dock) {
-			g_dock = new AutoStopDock(&g_monitor, &g_motion, &g_stop);
+			g_dock = new AutoStopDock(&g_monitor, &g_motion, &g_media,
+						  &g_silence, &g_stop);
 			// Dock ctor calls loadSettings() and would clobber env;
 			// re-apply so OBS_AUTOSTOP_* still wins when set.
 			applyEnvOverrides();
@@ -91,8 +103,20 @@ void onTick(void *, float)
 		return;
 	}
 
-	if (g_motion.shouldAutoStop(g_monitor.elapsedRecordingTime())) {
+	const auto elapsed = g_monitor.elapsedRecordingTime();
+
+	if (g_motion.shouldAutoStop(elapsed)) {
 		g_stop.requestStop("video inactivity duration reached");
+		return;
+	}
+
+	if (g_media.shouldAutoStop(elapsed)) {
+		g_stop.requestStop("media source ended");
+		return;
+	}
+
+	if (g_silence.shouldAutoStop(elapsed)) {
+		g_stop.requestStop("audio silence duration reached");
 	}
 }
 
@@ -166,6 +190,8 @@ void obs_module_unload(void)
 	obs_remove_tick_callback(onTick, nullptr);
 	obs_frontend_remove_event_callback(onFrontendEvent, nullptr);
 	g_motion.onRecordingStopped();
+	g_media.onRecordingStopped();
+	g_silence.onRecordingStopped();
 
 	if (g_dock) {
 		obs_frontend_remove_dock("obs-auto-stop-dock");
