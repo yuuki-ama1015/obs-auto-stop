@@ -197,7 +197,7 @@ void MediaEndWatcher::hookCurrentScene()
 	obs_source_release(prog);
 }
 
-void MediaEndWatcher::onMediaEnded(void *param, calldata_t *data)
+void MediaEndWatcher::onMediaEnded(void *param, struct calldata *data)
 {
 	auto *self = static_cast<MediaEndWatcher *>(param);
 	obs_source_t *source =

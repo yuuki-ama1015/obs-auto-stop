@@ -42,7 +42,7 @@ private:
 	void hookSource(obs_source *source);
 	static bool enumSceneItem(obs_scene_t *scene, obs_sceneitem_t *item,
 				  void *param);
-	static void onMediaEnded(void *param, calldata_t *data);
+	static void onMediaEnded(void *param, struct calldata *data);
 	static bool sourceIsLooping(obs_source *source);
 	static bool sourceIsMedia(obs_source *source);
 
