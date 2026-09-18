@@ -10,7 +10,7 @@ namespace {
 constexpr uint32_t kAnalyzeWidth = 160;
 constexpr uint32_t kAnalyzeHeight = 90;
 // Sample ~2 fps to keep CPU cost low.
-constexpr uint32_t kFrameRateDivisor = 15;
+constexpr uint32_t kFrameRateDivisor = 8;
 
 int clampPercent(int value)
 {
@@ -313,21 +313,26 @@ void MotionDetector::clearPreviousFrame()
 double MotionDetector::meanAbsDiffPercent(const uint8_t *a, const uint8_t *b,
 					  size_t count)
 {
+	// Motion score = percent of sampled pixels whose luma changed by more
+	// than kPixelDelta. Mean-abs-diff diluted typical video to ~1% on a
+	// 160x90 downsample, so a 2% threshold falsely treated motion as still.
+	constexpr int kPixelDelta = 12;
 	if (count == 0) {
 		return 0.0;
 	}
-	uint64_t acc = 0;
 	const size_t step = count > 4096 ? 4 : 1;
 	size_t samples = 0;
+	size_t changed = 0;
 	for (size_t i = 0; i < count; i += step) {
-		acc += static_cast<uint64_t>(
-			std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i])));
+		const int d = std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i]));
+		if (d >= kPixelDelta) {
+			++changed;
+		}
 		++samples;
 	}
 	if (samples == 0) {
 		return 0.0;
 	}
-	const double mean =
-		static_cast<double>(acc) / static_cast<double>(samples);
-	return (mean / 255.0) * 100.0;
+	return (static_cast<double>(changed) / static_cast<double>(samples)) *
+	       100.0;
 }

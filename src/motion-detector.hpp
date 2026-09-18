@@ -26,7 +26,7 @@ public:
 	void setInactivityDuration(seconds duration);
 	seconds inactivityDuration() const { return inactivity_duration_; }
 
-	// Sensitivity as a percentage of full-scale luma difference (e.g. 2.0 = 2%).
+	// Sensitivity threshold for motion score (changed-pixel %; e.g. 0.5 = 0.5%).
 	void setSensitivityPercent(double percent);
 	double sensitivityPercent() const { return sensitivity_percent_; }
 
@@ -69,7 +69,7 @@ private:
 
 	bool enabled_ = false;
 	seconds inactivity_duration_{15};
-	double sensitivity_percent_{2.0};
+	double sensitivity_percent_{0.5};
 	seconds min_recording_duration_{5 * 60};
 
 	bool region_enabled_ = false;

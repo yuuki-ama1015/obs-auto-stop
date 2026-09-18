@@ -35,7 +35,7 @@ constexpr const char *kKeyRegionW = "RegionWPercent";
 constexpr const char *kKeyRegionH = "RegionHPercent";
 constexpr int kDefaultMaxMinutes = 120;
 constexpr int kDefaultInactivitySec = 15;
-constexpr double kDefaultSensitivity = 2.0;
+constexpr double kDefaultSensitivity = 0.5;
 constexpr int kDefaultMinRecordingMin = 5;
 } // namespace
 
