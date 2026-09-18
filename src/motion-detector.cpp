@@ -242,6 +242,18 @@ void MotionDetector::onVideoFrame(const struct video_data *frame)
 			stillness_started_ = clock::now();
 			stillness_active_ = true;
 		}
+		static auto last_log = clock::time_point{};
+		const auto now = clock::now();
+		if (last_log.time_since_epoch().count() == 0 ||
+		    now - last_log >= std::chrono::seconds{1}) {
+			last_log = now;
+			blog(LOG_INFO,
+			     "OBS Auto Stop: motion=%.2f%% sens=%.2f%% still=%lld/%lld region=%ux%u",
+			     last_motion_percent_, sensitivity_percent_,
+			     static_cast<long long>(stillnessDuration().count()),
+			     static_cast<long long>(inactivity_duration_.count()),
+			     region_pixel_w_, region_pixel_h_);
+		}
 	}
 
 	prev_luma_ = std::move(region);
@@ -258,6 +270,11 @@ struct video_scale_info MotionDetector::makeConversion()
 	return info;
 }
 
+void MotionDetector::rawVideoCallback(void *param, struct video_data *frame)
+{
+	static_cast<MotionDetector *>(param)->onVideoFrame(frame);
+}
+
 void MotionDetector::ensureCallbackRegistered()
 {
 	if (callback_registered_) {
@@ -267,11 +284,7 @@ void MotionDetector::ensureCallbackRegistered()
 	analyze_width_ = conversion.width;
 	analyze_height_ = conversion.height;
 	obs_add_raw_video_callback2(&conversion, kFrameRateDivisor,
-				    [](void *param, struct video_data *frame) {
-					    static_cast<MotionDetector *>(param)
-						    ->onVideoFrame(frame);
-				    },
-				    this);
+				    rawVideoCallback, this);
 	callback_registered_ = true;
 }
 
@@ -280,11 +293,7 @@ void MotionDetector::ensureCallbackRemoved()
 	if (!callback_registered_) {
 		return;
 	}
-	obs_remove_raw_video_callback(
-		[](void *param, struct video_data *frame) {
-			static_cast<MotionDetector *>(param)->onVideoFrame(frame);
-		},
-		this);
+	obs_remove_raw_video_callback(rawVideoCallback, this);
 	callback_registered_ = false;
 }
 
