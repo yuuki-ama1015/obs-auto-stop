@@ -6,7 +6,7 @@ on:
       plugin_ref:
         description: Git ref of obs-auto-stop to build
         required: true
-        default: v0.1.0-pre-region
+        default: main
       attach_release:
         description: Release tag to attach the zip to (empty to skip)
         required: false
