@@ -45,6 +45,8 @@ else()
         src/auto-stop-dock.cpp
         src/region-select-dialog.cpp
         src/motion-detector.cpp
+        src/media-end-watcher.cpp
+        src/silence-detector.cpp
         src/plugin-main.cpp
         src/recording-monitor.cpp
         src/stop-controller.cpp
