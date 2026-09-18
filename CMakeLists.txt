@@ -86,6 +86,9 @@ else()
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/data/locale/en-US.ini"
             "${_obs_data_dir}/locale/en-US.ini"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/locale/ja-JP.ini"
+            "${_obs_data_dir}/locale/ja-JP.ini"
         COMMENT "Copying OBS Auto Stop locale data"
     )
 

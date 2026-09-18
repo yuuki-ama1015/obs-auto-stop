@@ -70,6 +70,7 @@ OBS 32 以降の推奨パスは **ProgramData** です（`%APPDATA%\obs-studio\p
 C:\ProgramData\obs-studio\plugins\obs-auto-stop\
   bin\64bit\obs-auto-stop.dll
   data\locale\en-US.ini
+  data\locale\ja-JP.ini
 ```
 
 3. OBS を起動し、メニュー「ドック」に **OBS Auto Stop** が出るか確認
@@ -86,6 +87,7 @@ C:\ProgramData\obs-studio\plugins\obs-auto-stop\
 ~/.config/obs-studio/plugins/obs-auto-stop/
   bin/64bit/obs-auto-stop.so
   data/locale/en-US.ini
+  data/locale/ja-JP.ini
 ```
 
 3. OBS を起動し、ドックに **OBS Auto Stop** が出るか確認
@@ -109,14 +111,19 @@ Qt Widgets が必要です（Dock UI 用）。
 
 - プラグイン名: `obs-auto-stop`
 - ログ接頭辞: `OBS Auto Stop`
-- テスト用環境変数:
+- テスト用環境変数（設定されている場合、プロファイル保存値より優先されます）:
   - `OBS_AUTOSTOP_MAX_SECONDS`
   - `OBS_AUTOSTOP_MOTION`
   - `OBS_AUTOSTOP_INACTIVITY_SECONDS`
   - `OBS_AUTOSTOP_MIN_RECORDING_SECONDS`
+- ロケール: `data/locale/en-US.ini`, `data/locale/ja-JP.ini`（OBS の言語設定に応じて読み込まれます）。Dock UI の一部ラベルは C++ 側で日本語ハードコードです。
 
 Linux 環境では、録画タイマー自動停止と画面静止による自動停止の両方を実録画で確認済みです。出力ファイルの生成可否は表示環境に依存します。
 
 ## LICENSE
 
-`LICENSE` ファイルはまだありません。OBS Studio や今後追加する依存ライブラリとの互換性を確認してから選定します。
+本プロジェクトは **GPL-2.0**（GNU General Public License v2.0）です。全文はリポジトリ直下の [`LICENSE`](LICENSE) を参照してください。
+
+English: This project is licensed under **GPL-2.0**. See [`LICENSE`](LICENSE) for the full text.
+
+OBS Studio の Plugin API / Qt を利用するプラグインとして、OBS 本体と同じく GPL-2.0 を採用しています。
