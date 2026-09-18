@@ -84,6 +84,8 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	sensitivitySpin_->setRange(0.1, 50.0);
 	sensitivitySpin_->setSingleStep(0.1);
 	sensitivitySpin_->setSuffix(QStringLiteral(" %"));
+	sensitivitySpin_->setToolTip(QStringLiteral(
+		"この起動中だけ有効です。OBSを終了すると既定値（0.5%）に戻ります"));
 	minRecordingSpin_ = new QSpinBox(this);
 	minRecordingSpin_->setRange(0, 120);
 	minRecordingSpin_->setSuffix(QStringLiteral(" 分"));
@@ -248,10 +250,10 @@ void AutoStopDock::onInactivitySecondsChanged(int seconds)
 
 void AutoStopDock::onSensitivityChanged(double percent)
 {
+	// Sensitivity is session-only: never written to the profile.
 	if (motion_) {
 		motion_->setSensitivityPercent(percent);
 	}
-	saveSettings();
 }
 
 void AutoStopDock::applyMinRecordingToAll(int minutes)
@@ -541,8 +543,8 @@ void AutoStopDock::loadSettings()
 		config_get_bool(config, kConfigSection, kKeyMotionEnabled);
 	int inactivity = static_cast<int>(
 		config_get_int(config, kConfigSection, kKeyInactivitySec));
-	const double sensitivity =
-		config_get_double(config, kConfigSection, kKeySensitivity);
+	// Stillness sensitivity always starts at the default each launch.
+	const double sensitivity = kDefaultSensitivity;
 	int minRecMin = static_cast<int>(
 		config_get_int(config, kConfigSection, kKeyMinRecordingMin));
 	const bool regionEnabled =
@@ -664,8 +666,9 @@ void AutoStopDock::saveSettings() const
 			motionCheck_->isChecked());
 	config_set_int(config, kConfigSection, kKeyInactivitySec,
 		       inactivitySpin_->value());
+	// Do not persist SensitivityPercent — reset to default next launch.
 	config_set_double(config, kConfigSection, kKeySensitivity,
-			  sensitivitySpin_->value());
+			  kDefaultSensitivity);
 	config_set_int(config, kConfigSection, kKeyMinRecordingMin,
 		       minRecordingSpin_->value());
 	config_set_bool(config, kConfigSection, kKeyRegionEnabled,
