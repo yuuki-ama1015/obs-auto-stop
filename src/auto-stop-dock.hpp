@@ -8,6 +8,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 class QTimer;
+class QShowEvent;
 
 class RecordingMonitor;
 class MotionDetector;
@@ -38,6 +39,7 @@ private slots:
 	void onSilenceSecondsChanged(int seconds);
 	void onSilenceThresholdChanged(double db);
 	void refreshStatus();
+	void onMinimizeToTaskbar();
 
 private:
 	void loadSettings();
@@ -45,6 +47,9 @@ private:
 	void updateRegionControlsEnabled();
 	void updateRegionStatusLabel();
 	void applyMinRecordingToAll(int minutes);
+	void showEvent(QShowEvent *event) override;
+	QWidget *floatingWindow() const;
+	void ensureFloatingMinimizeButton();
 
 	RecordingMonitor *monitor_ = nullptr;
 	MotionDetector *motion_ = nullptr;
@@ -71,6 +76,8 @@ private:
 	QLabel *motionLabel_ = nullptr;
 	QLabel *mediaLabel_ = nullptr;
 	QLabel *silenceLabel_ = nullptr;
+	QLabel *combineHintLabel_ = nullptr;
+	QPushButton *minimizeButton_ = nullptr;
 	QTimer *refreshTimer_ = nullptr;
 
 	int regionX_ = 0;

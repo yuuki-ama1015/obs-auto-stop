@@ -17,6 +17,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QShowEvent>
+#include <QMessageBox>
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -64,6 +66,12 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	auto *layout = new QVBoxLayout(this);
 	layout->setContentsMargins(8, 8, 8, 8);
 	layout->setSpacing(8);
+
+	combineHintLabel_ = new QLabel(
+		QStringLiteral("ONにした条件は「または」で判定します。どれか1つでも満たしたら録画を終了します。"),
+		this);
+	combineHintLabel_->setWordWrap(true);
+	combineHintLabel_->setStyleSheet(QStringLiteral("color: palette(mid);"));
 
 	autoStopCheck_ = new QCheckBox(QStringLiteral("タイマーによって自動で録画終了"), this);
 	maxMinutesSpin_ = new QSpinBox(this);
@@ -157,7 +165,8 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	mediaLabel_ = new QLabel(QStringLiteral("メディア終了: —"), this);
 	silenceLabel_ = new QLabel(QStringLiteral("無音時間: —"), this);
 
-	// Order: media end → timer → motion (+ nested region) → silence → status
+	// Order: combine hint → media end → timer → motion (+ nested region) → silence → status → minimize
+	layout->addWidget(combineHintLabel_);
 	layout->addWidget(mediaEndCheck_);
 	layout->addSpacing(6);
 	layout->addWidget(autoStopCheck_);
@@ -173,6 +182,11 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->addWidget(motionLabel_);
 	layout->addWidget(mediaLabel_);
 	layout->addWidget(silenceLabel_);
+
+	minimizeButton_ = new QPushButton(QStringLiteral("タスクバーに最小化"), this);
+	minimizeButton_->setToolTip(QStringLiteral(
+		"ドックをフロート表示しているとき、タスクバーへ最小化します"));
+	layout->addWidget(minimizeButton_);
 	layout->addStretch(1);
 
 	connect(autoStopCheck_, &QCheckBox::toggled, this,
@@ -201,6 +215,9 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	connect(silenceThresholdSpin_,
 		qOverload<double>(&QDoubleSpinBox::valueChanged), this,
 		&AutoStopDock::onSilenceThresholdChanged);
+	connect(minimizeButton_, &QPushButton::clicked, this,
+		&AutoStopDock::onMinimizeToTaskbar);
+
 
 	refreshTimer_ = new QTimer(this);
 	refreshTimer_->setInterval(500);
@@ -686,4 +703,50 @@ void AutoStopDock::saveSettings() const
 	config_set_double(config, kConfigSection, kKeySilenceThresholdDb,
 			  silenceThresholdSpin_->value());
 	config_save_safe(config, "tmp", nullptr);
+}
+
+QWidget *AutoStopDock::floatingWindow() const
+{
+	for (QWidget *w = parentWidget(); w; w = w->parentWidget()) {
+		if (w->isWindow() && w != this) {
+			return w;
+		}
+	}
+	return nullptr;
+}
+
+void AutoStopDock::ensureFloatingMinimizeButton()
+{
+	QWidget *win = floatingWindow();
+	if (!win) {
+		return;
+	}
+	const Qt::WindowFlags flags = win->windowFlags();
+	if (flags & Qt::WindowMinimizeButtonHint) {
+		return;
+	}
+	win->setWindowFlags(flags | Qt::Window | Qt::WindowMinimizeButtonHint |
+			    Qt::WindowCloseButtonHint);
+	win->show();
+}
+
+void AutoStopDock::showEvent(QShowEvent *event)
+{
+	QWidget::showEvent(event);
+	ensureFloatingMinimizeButton();
+}
+
+void AutoStopDock::onMinimizeToTaskbar()
+{
+	ensureFloatingMinimizeButton();
+	QWidget *win = floatingWindow();
+	if (!win || !win->isWindow()) {
+		QMessageBox::information(
+			this, QStringLiteral("OBS Auto Stop"),
+			QStringLiteral(
+				"フロート表示のときだけタスクバーに最小化できます。\n"
+				"ドックをウィンドウから切り離してから、もう一度押してください。"));
+		return;
+	}
+	win->showMinimized();
 }
