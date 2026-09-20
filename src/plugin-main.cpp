@@ -98,6 +98,7 @@ void onTick(void *, float)
 		return;
 	}
 
+	// Max-duration timer is always a hard stop when enabled (not part of AND).
 	if (g_monitor.isEnabled() && g_monitor.hasReachedMaxDuration()) {
 		g_stop.requestStop("max recording duration reached");
 		return;
@@ -105,17 +106,44 @@ void onTick(void *, float)
 
 	const auto elapsed = g_monitor.elapsedRecordingTime();
 
-	if (g_motion.shouldAutoStop(elapsed)) {
+	const bool motion_on = g_motion.isEnabled();
+	const bool media_on = g_media.isEnabled();
+	const bool silence_on = g_silence.isEnabled();
+
+	const bool motion_hit = motion_on && g_motion.shouldAutoStop(elapsed);
+	const bool media_hit = media_on && g_media.shouldAutoStop(elapsed);
+	const bool silence_hit = silence_on && g_silence.shouldAutoStop(elapsed);
+
+	const int enabled_count =
+		(motion_on ? 1 : 0) + (media_on ? 1 : 0) + (silence_on ? 1 : 0);
+	if (enabled_count == 0) {
+		return;
+	}
+
+	if (g_stop.combineMode() == StopCombineMode::And) {
+		if (motion_on && !motion_hit) {
+			return;
+		}
+		if (media_on && !media_hit) {
+			return;
+		}
+		if (silence_on && !silence_hit) {
+			return;
+		}
+		g_stop.requestStop("all enabled conditions met (AND)");
+		return;
+	}
+
+	// OR (default): any one enabled condition is enough.
+	if (motion_hit) {
 		g_stop.requestStop("video inactivity duration reached");
 		return;
 	}
-
-	if (g_media.shouldAutoStop(elapsed)) {
+	if (media_hit) {
 		g_stop.requestStop("media source ended");
 		return;
 	}
-
-	if (g_silence.shouldAutoStop(elapsed)) {
+	if (silence_hit) {
 		g_stop.requestStop("audio silence duration reached");
 	}
 }

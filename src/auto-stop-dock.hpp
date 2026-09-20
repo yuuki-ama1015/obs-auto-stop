@@ -3,6 +3,8 @@
 #include <QWidget>
 
 class QCheckBox;
+class QComboBox;
+class QToolButton;
 class QSpinBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -40,6 +42,8 @@ private slots:
 	void onSilenceThresholdChanged(double db);
 	void refreshStatus();
 	void onMinimizeToTaskbar();
+	void onCombineModeChanged(int index);
+	void onOpenRecordingFolder();
 
 private:
 	void loadSettings();
@@ -50,6 +54,7 @@ private:
 	void showEvent(QShowEvent *event) override;
 	QWidget *floatingWindow() const;
 	void ensureFloatingMinimizeButton();
+	void updateCombineHint();
 
 	RecordingMonitor *monitor_ = nullptr;
 	MotionDetector *motion_ = nullptr;
@@ -77,6 +82,8 @@ private:
 	QLabel *mediaLabel_ = nullptr;
 	QLabel *silenceLabel_ = nullptr;
 	QLabel *combineHintLabel_ = nullptr;
+	QComboBox *combineModeCombo_ = nullptr;
+	QToolButton *openFolderButton_ = nullptr;
 	QPushButton *minimizeButton_ = nullptr;
 	QTimer *refreshTimer_ = nullptr;
 
