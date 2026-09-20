@@ -8,9 +8,17 @@
 #include "stop-controller.hpp"
 
 #include <obs-frontend-api.h>
+#include <util/bmem.h>
 #include <util/config-file.h>
 
 #include <QCheckBox>
+#include <QFileInfo>
+#include <QDir>
+#include <QUrl>
+#include <QDesktopServices>
+#include <QStyle>
+#include <QToolButton>
+#include <QComboBox>
 #include <QDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -24,6 +32,7 @@
 #include <QVBoxLayout>
 
 #include <chrono>
+#include <cstring>
 #include <string>
 
 namespace {
@@ -43,6 +52,7 @@ constexpr const char *kKeyMediaEndEnabled = "MediaEndEnabled";
 constexpr const char *kKeySilenceEnabled = "SilenceEnabled";
 constexpr const char *kKeySilenceSec = "SilenceSeconds";
 constexpr const char *kKeySilenceThresholdDb = "SilenceThresholdDb";
+constexpr const char *kKeyCombineMode = "CombineMode";
 constexpr int kDefaultMaxMinutes = 120;
 constexpr int kDefaultInactivitySec = 15;
 constexpr double kDefaultSensitivity = 0.5;
@@ -67,9 +77,26 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->setContentsMargins(8, 8, 8, 8);
 	layout->setSpacing(8);
 
-	combineHintLabel_ = new QLabel(
-		QStringLiteral("ONにした条件は「または」で判定します。どれか1つでも満たしたら録画を終了します。"),
-		this);
+	combineModeCombo_ = new QComboBox(this);
+	combineModeCombo_->addItem(QStringLiteral("または（どれか1つ）"),
+				   static_cast<int>(StopCombineMode::Or));
+	combineModeCombo_->addItem(QStringLiteral("かつ（すべて）"),
+				   static_cast<int>(StopCombineMode::And));
+	combineModeCombo_->setToolTip(QStringLiteral(
+		"静止・無音・メディア終了の組み合わせ方です。
+"
+		"「または」: ONの条件のどれか1つで終了
+"
+		"「かつ」: ONの条件がすべて満たされたら終了
+"
+		"※タイマー（最大録画時間）は常に単独で終了します"));
+
+	openFolderButton_ = new QToolButton(this);
+	openFolderButton_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+	openFolderButton_->setAutoRaise(true);
+	openFolderButton_->setToolTip(QStringLiteral("録画の保存先フォルダを開く"));
+
+	combineHintLabel_ = new QLabel(this);
 	combineHintLabel_->setWordWrap(true);
 	combineHintLabel_->setStyleSheet(QStringLiteral("color: palette(mid);"));
 
@@ -165,7 +192,13 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	mediaLabel_ = new QLabel(QStringLiteral("メディア終了: —"), this);
 	silenceLabel_ = new QLabel(QStringLiteral("無音時間: —"), this);
 
-	// Order: combine hint → media end → timer → motion (+ nested region) → silence → status → minimize
+	// Order: combine mode → hint → media end → timer → motion → silence → status → minimize
+	auto *combineRow = new QHBoxLayout;
+	combineRow->setContentsMargins(0, 0, 0, 0);
+	combineRow->addWidget(new QLabel(QStringLiteral("条件の組み合わせ"), this));
+	combineRow->addWidget(combineModeCombo_, 1);
+	combineRow->addWidget(openFolderButton_);
+	layout->addLayout(combineRow);
 	layout->addWidget(combineHintLabel_);
 	layout->addWidget(mediaEndCheck_);
 	layout->addSpacing(6);
@@ -217,6 +250,10 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 		&AutoStopDock::onSilenceThresholdChanged);
 	connect(minimizeButton_, &QPushButton::clicked, this,
 		&AutoStopDock::onMinimizeToTaskbar);
+	connect(combineModeCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
+		this, &AutoStopDock::onCombineModeChanged);
+	connect(openFolderButton_, &QToolButton::clicked, this,
+		&AutoStopDock::onOpenRecordingFolder);
 
 
 	refreshTimer_ = new QTimer(this);
@@ -226,6 +263,7 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	refreshTimer_->start();
 
 	loadSettings();
+	updateCombineHint();
 	refreshStatus();
 }
 
@@ -544,6 +582,7 @@ void AutoStopDock::loadSettings()
 	config_set_default_int(config, kConfigSection, kKeyRegionH, 100);
 	config_set_default_bool(config, kConfigSection, kKeyMediaEndEnabled,
 				false);
+	config_set_default_int(config, kConfigSection, kKeyCombineMode, 0);
 	config_set_default_bool(config, kConfigSection, kKeySilenceEnabled,
 				false);
 	config_set_default_int(config, kConfigSection, kKeySilenceSec,
@@ -576,6 +615,11 @@ void AutoStopDock::loadSettings()
 		config_get_int(config, kConfigSection, kKeyRegionH));
 	const bool mediaEndEnabled =
 		config_get_bool(config, kConfigSection, kKeyMediaEndEnabled);
+	int combineMode = static_cast<int>(
+		config_get_int(config, kConfigSection, kKeyCombineMode));
+	if (combineMode != 0 && combineMode != 1) {
+		combineMode = 0;
+	}
 	const bool silenceEnabled =
 		config_get_bool(config, kConfigSection, kKeySilenceEnabled);
 	int silenceSec = static_cast<int>(
@@ -602,6 +646,7 @@ void AutoStopDock::loadSettings()
 	const bool old6 = minRecordingSpin_->blockSignals(true);
 	const bool old7 = regionCheck_->blockSignals(true);
 	const bool old8 = mediaEndCheck_->blockSignals(true);
+	const bool oldCombine = combineModeCombo_->blockSignals(true);
 	const bool old9 = silenceCheck_->blockSignals(true);
 	const bool old10 = silenceSpin_->blockSignals(true);
 	const bool old11 = silenceThresholdSpin_->blockSignals(true);
@@ -618,6 +663,11 @@ void AutoStopDock::loadSettings()
 	regionW_ = rw;
 	regionH_ = rh;
 	mediaEndCheck_->setChecked(mediaEndEnabled);
+	const int combineIdx = combineModeCombo_->findData(combineMode);
+	combineModeCombo_->setCurrentIndex(combineIdx >= 0 ? combineIdx : 0);
+	if (stop_) {
+		stop_->setCombineMode(static_cast<StopCombineMode>(combineMode));
+	}
 	silenceCheck_->setChecked(silenceEnabled);
 	silenceSpin_->setValue(silenceSec);
 	silenceThresholdSpin_->setValue(silenceDb);
@@ -630,6 +680,7 @@ void AutoStopDock::loadSettings()
 	minRecordingSpin_->blockSignals(old6);
 	regionCheck_->blockSignals(old7);
 	mediaEndCheck_->blockSignals(old8);
+	combineModeCombo_->blockSignals(oldCombine);
 	silenceCheck_->blockSignals(old9);
 	silenceSpin_->blockSignals(old10);
 	silenceThresholdSpin_->blockSignals(old11);
@@ -696,6 +747,8 @@ void AutoStopDock::saveSettings() const
 	config_set_int(config, kConfigSection, kKeyRegionH, regionH_);
 	config_set_bool(config, kConfigSection, kKeyMediaEndEnabled,
 			mediaEndCheck_->isChecked());
+	config_set_int(config, kConfigSection, kKeyCombineMode,
+		       combineModeCombo_->currentData().toInt());
 	config_set_bool(config, kConfigSection, kKeySilenceEnabled,
 			silenceCheck_->isChecked());
 	config_set_int(config, kConfigSection, kKeySilenceSec,
@@ -750,3 +803,77 @@ void AutoStopDock::onMinimizeToTaskbar()
 	}
 	win->showMinimized();
 }
+
+void AutoStopDock::updateCombineHint()
+{
+	if (!combineHintLabel_ || !combineModeCombo_) {
+		return;
+	}
+	const int mode = combineModeCombo_->currentData().toInt();
+	if (mode == static_cast<int>(StopCombineMode::And)) {
+		combineHintLabel_->setText(QStringLiteral(
+			"ONにした静止・無音・メディア終了は「かつ」で判定します。すべて満たしたら録画を終了します（タイマーは単独で終了）。"));
+	} else {
+		combineHintLabel_->setText(QStringLiteral(
+			"ONにした静止・無音・メディア終了は「または」で判定します。どれか1つでも満たしたら録画を終了します（タイマーは単独で終了）。"));
+	}
+}
+
+void AutoStopDock::onCombineModeChanged(int)
+{
+	if (stop_ && combineModeCombo_) {
+		stop_->setCombineMode(static_cast<StopCombineMode>(
+			combineModeCombo_->currentData().toInt()));
+	}
+	updateCombineHint();
+	saveSettings();
+}
+
+void AutoStopDock::onOpenRecordingFolder()
+{
+	QString folder;
+
+	char *path = obs_frontend_get_current_record_output_path();
+	if (path) {
+		folder = QString::fromUtf8(path);
+		bfree(path);
+	}
+
+	if (folder.isEmpty()) {
+		config_t *cfg = obs_frontend_get_profile_config();
+		if (cfg) {
+			const char *mode = config_get_string(cfg, "Output", "Mode");
+			const bool advanced = mode && strcmp(mode, "Advanced") == 0;
+			const char *rec = nullptr;
+			if (advanced) {
+				rec = config_get_string(cfg, "AdvOut", "RecFilePath");
+			} else {
+				rec = config_get_string(cfg, "SimpleOutput", "FilePath");
+			}
+			if (rec && *rec) {
+				folder = QString::fromUtf8(rec);
+			}
+		}
+	}
+
+	if (folder.isEmpty()) {
+		QMessageBox::information(
+			this, QStringLiteral("OBS Auto Stop"),
+			QStringLiteral("録画の保存先を取得できませんでした。"));
+		return;
+	}
+
+	QFileInfo info(folder);
+	if (info.isFile()) {
+		folder = info.absolutePath();
+	}
+	if (!QDir(folder).exists()) {
+		QMessageBox::warning(
+			this, QStringLiteral("OBS Auto Stop"),
+			QStringLiteral("保存先フォルダが存在しません:\n%1").arg(folder));
+		return;
+	}
+
+	QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+}
+
