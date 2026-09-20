@@ -24,6 +24,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QSizePolicy>
 #include <QPushButton>
 #include <QShowEvent>
 #include <QMessageBox>
@@ -92,7 +93,9 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 
 	combineHintLabel_ = new QLabel(this);
 	combineHintLabel_->setWordWrap(true);
-	combineHintLabel_->setStyleSheet(QStringLiteral("color: palette(mid);"));
+	combineHintLabel_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+	combineHintLabel_->setStyleSheet(
+		QStringLiteral("color: palette(mid); margin: 0; padding: 0;"));
 
 	autoStopCheck_ = new QCheckBox(QStringLiteral("タイマーによって自動で録画終了"), this);
 	maxMinutesSpin_ = new QSpinBox(this);
@@ -189,11 +192,17 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	// Order: combine mode → hint → media end → timer → motion → silence → status → minimize
 	auto *combineRow = new QHBoxLayout;
 	combineRow->setContentsMargins(0, 0, 0, 0);
+	combineRow->setSpacing(6);
 	combineRow->addWidget(new QLabel(QStringLiteral("条件の組み合わせ"), this));
 	combineRow->addWidget(combineModeCombo_, 1);
 	combineRow->addWidget(openFolderButton_);
-	layout->addLayout(combineRow);
-	layout->addWidget(combineHintLabel_);
+
+	auto *combineBox = new QVBoxLayout;
+	combineBox->setContentsMargins(0, 0, 0, 0);
+	combineBox->setSpacing(2);
+	combineBox->addLayout(combineRow);
+	combineBox->addWidget(combineHintLabel_);
+	layout->addLayout(combineBox);
 	layout->addWidget(mediaEndCheck_);
 	layout->addSpacing(6);
 	layout->addWidget(autoStopCheck_);
@@ -806,10 +815,10 @@ void AutoStopDock::updateCombineHint()
 	const int mode = combineModeCombo_->currentData().toInt();
 	if (mode == static_cast<int>(StopCombineMode::And)) {
 		combineHintLabel_->setText(QStringLiteral(
-			"ONにした静止・無音・メディア終了は「かつ」で判定します。すべて満たしたら録画を終了します（タイマーは単独で終了）。"));
+			"「かつ」: ONの条件をすべて満たしたら終了（タイマーは単独）"));
 	} else {
 		combineHintLabel_->setText(QStringLiteral(
-			"ONにした静止・無音・メディア終了は「または」で判定します。どれか1つでも満たしたら録画を終了します（タイマーは単独で終了）。"));
+			"「または」: ONの条件のどれか1つで終了（タイマーは単独）"));
 	}
 }
 
