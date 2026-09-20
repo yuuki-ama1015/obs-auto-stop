@@ -82,14 +82,11 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 				   static_cast<int>(StopCombineMode::Or));
 	combineModeCombo_->addItem(QStringLiteral("かつ（すべて）"),
 				   static_cast<int>(StopCombineMode::And));
-	combineModeCombo_->setToolTip(QStringLiteral(
-		"静止・無音・メディア終了の組み合わせ方です。
-"
-		"「または」: ONの条件のどれか1つで終了
-"
-		"「かつ」: ONの条件がすべて満たされたら終了
-"
-		"※タイマー（最大録画時間）は常に単独で終了します"));
+	combineModeCombo_->setToolTip(
+		QStringLiteral("静止・無音・メディア終了の組み合わせ方です。
+「または」: ONの条件のどれか1つで終了
+「かつ」: ONの条件がすべて満たされたら終了
+※タイマー（最大録画時間）は常に単独で終了します"));
 
 	openFolderButton_ = new QToolButton(this);
 	openFolderButton_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
