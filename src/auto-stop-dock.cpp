@@ -20,6 +20,7 @@
 #include <QToolButton>
 #include <QComboBox>
 #include <QDialog>
+#include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -761,11 +762,13 @@ void AutoStopDock::saveSettings() const
 	config_save_safe(config, "tmp", nullptr);
 }
 
-QWidget *AutoStopDock::floatingWindow() const
+QDockWidget *AutoStopDock::hostDock() const
 {
+	// OBS wraps the widget in a QDockWidget. Never fall through to the
+	// main window: minimizing it would minimize all of OBS.
 	for (QWidget *w = parentWidget(); w; w = w->parentWidget()) {
-		if (w->isWindow() && w != this) {
-			return w;
+		if (auto *dock = qobject_cast<QDockWidget *>(w)) {
+			return dock;
 		}
 	}
 	return nullptr;
@@ -773,17 +776,17 @@ QWidget *AutoStopDock::floatingWindow() const
 
 void AutoStopDock::ensureFloatingMinimizeButton()
 {
-	QWidget *win = floatingWindow();
-	if (!win) {
+	QDockWidget *dock = hostDock();
+	if (!dock || !dock->isFloating()) {
 		return;
 	}
-	const Qt::WindowFlags flags = win->windowFlags();
+	const Qt::WindowFlags flags = dock->windowFlags();
 	if (flags & Qt::WindowMinimizeButtonHint) {
 		return;
 	}
-	win->setWindowFlags(flags | Qt::Window | Qt::WindowMinimizeButtonHint |
-			    Qt::WindowCloseButtonHint);
-	win->show();
+	dock->setWindowFlags(flags | Qt::Window | Qt::WindowMinimizeButtonHint |
+			     Qt::WindowCloseButtonHint);
+	dock->show();
 }
 
 void AutoStopDock::showEvent(QShowEvent *event)
@@ -794,9 +797,8 @@ void AutoStopDock::showEvent(QShowEvent *event)
 
 void AutoStopDock::onMinimizeToTaskbar()
 {
-	ensureFloatingMinimizeButton();
-	QWidget *win = floatingWindow();
-	if (!win || !win->isWindow()) {
+	QDockWidget *dock = hostDock();
+	if (!dock || !dock->isFloating()) {
 		QMessageBox::information(
 			this, QStringLiteral("OBS Auto Stop"),
 			QStringLiteral(
@@ -804,7 +806,8 @@ void AutoStopDock::onMinimizeToTaskbar()
 				"ドックをウィンドウから切り離してから、もう一度押してください。"));
 		return;
 	}
-	win->showMinimized();
+	ensureFloatingMinimizeButton();
+	dock->showMinimized();
 }
 
 void AutoStopDock::updateCombineHint()

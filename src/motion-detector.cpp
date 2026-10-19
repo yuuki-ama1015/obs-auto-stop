@@ -37,6 +37,9 @@ void MotionDetector::setEnabled(bool enabled)
 		resetStillness();
 		monitoring_ = false;
 		clearPreviousFrame();
+	} else if (recording_active_ && !monitoring_) {
+		// Enabled mid-recording: start watching right away.
+		startMonitoring();
 	}
 }
 
@@ -182,23 +185,53 @@ bool MotionDetector::shouldAutoStop(seconds recordingElapsed) const
 
 void MotionDetector::onRecordingStarted()
 {
-	monitoring_ = enabled_;
+	recording_active_ = true;
+	paused_ = false;
+	monitoring_ = false;
+	if (enabled_) {
+		startMonitoring();
+	}
+}
+
+void MotionDetector::startMonitoring()
+{
+	monitoring_ = true;
 	resetStillness();
 	clearPreviousFrame();
 	last_motion_percent_ = 0.0;
+	if (!paused_) {
+		ensureCallbackRegistered();
+	}
+	blog(LOG_INFO,
+	     "OBS Auto Stop: motion detection started (inactivity %lld s, sensitivity %.2f%%, min rec %lld s, region %s)",
+	     static_cast<long long>(inactivity_duration_.count()),
+	     sensitivity_percent_,
+	     static_cast<long long>(min_recording_duration_.count()),
+	     region_enabled_ ? "on" : "full-frame");
+}
+
+void MotionDetector::onRecordingPaused()
+{
+	paused_ = true;
+	ensureCallbackRemoved();
+	resetStillness();
+	clearPreviousFrame();
+}
+
+void MotionDetector::onRecordingResumed()
+{
+	paused_ = false;
+	resetStillness();
+	clearPreviousFrame();
 	if (monitoring_) {
 		ensureCallbackRegistered();
-		blog(LOG_INFO,
-		     "OBS Auto Stop: motion detection started (inactivity %lld s, sensitivity %.2f%%, min rec %lld s, region %s)",
-		     static_cast<long long>(inactivity_duration_.count()),
-		     sensitivity_percent_,
-		     static_cast<long long>(min_recording_duration_.count()),
-		     region_enabled_ ? "on" : "full-frame");
 	}
 }
 
 void MotionDetector::onRecordingStopped()
 {
+	recording_active_ = false;
+	paused_ = false;
 	monitoring_ = false;
 	ensureCallbackRemoved();
 	resetStillness();

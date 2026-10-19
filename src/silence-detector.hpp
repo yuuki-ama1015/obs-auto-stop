@@ -36,8 +36,11 @@ public:
 
 	void onRecordingStarted();
 	void onRecordingStopped();
+	void onRecordingPaused();
+	void onRecordingResumed();
 
 private:
+	void startMonitoring();
 	void ensureCallbackRegistered();
 	void ensureCallbackRemoved();
 	void resetSilence();
@@ -52,6 +55,8 @@ private:
 	seconds min_recording_duration_{5 * 60};
 
 	bool monitoring_ = false;
+	bool recording_active_ = false;
+	bool paused_ = false;
 	bool callback_registered_ = false;
 
 	mutable std::mutex mutex_;

@@ -45,13 +45,19 @@ MediaEndWatcher::~MediaEndWatcher()
 
 void MediaEndWatcher::setEnabled(bool enabled)
 {
-	enabled_ = enabled;
-	if (!enabled_) {
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		enabled_ = enabled;
+	}
+	if (!enabled) {
 		clearHooks();
 		std::lock_guard<std::mutex> lock(mutex_);
 		ended_ = false;
 		ended_name_.clear();
 		monitoring_ = false;
+	} else if (recording_active_ && !monitoring_) {
+		// Enabled mid-recording: start watching right away.
+		startMonitoring();
 	}
 }
 
@@ -83,24 +89,38 @@ std::string MediaEndWatcher::endedSourceName() const
 
 void MediaEndWatcher::onRecordingStarted()
 {
+	recording_active_ = true;
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		ended_ = false;
 		ended_name_.clear();
-		monitoring_ = enabled_;
+		monitoring_ = false;
 	}
 	clearHooks();
 	if (enabled_) {
-		hookCurrentScene();
-		blog(LOG_INFO,
-		     "OBS Auto Stop: media-end watch started (min rec %lld s, hooks %zu)",
-		     static_cast<long long>(min_recording_duration_.count()),
-		     hooked_.size());
+		startMonitoring();
 	}
+}
+
+void MediaEndWatcher::startMonitoring()
+{
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		ended_ = false;
+		ended_name_.clear();
+		monitoring_ = true;
+	}
+	clearHooks();
+	hookCurrentScene();
+	blog(LOG_INFO,
+	     "OBS Auto Stop: media-end watch started (min rec %lld s, hooks %zu)",
+	     static_cast<long long>(min_recording_duration_.count()),
+	     hooked_.size());
 }
 
 void MediaEndWatcher::onRecordingStopped()
 {
+	recording_active_ = false;
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		monitoring_ = false;
