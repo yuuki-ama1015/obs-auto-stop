@@ -19,9 +19,11 @@ English: External OBS Studio plugin that can auto-stop recording on a max timer 
 
 最新の配布 zip は GitHub Releases にあります。
 
-- [v0.1.0-pre-region](https://github.com/yuuki-ama1015/obs-auto-stop/releases/tag/v0.1.0-pre-region)
-  - Windows: `obs-auto-stop-v0.1.0-pre-region-windows.zip`
-  - Linux: `obs-auto-stop-v0.1.0-pre-region-linux.zip`
+- 公開済み: [v0.1.0-pre-region](https://github.com/yuuki-ama1015/obs-auto-stop/releases/tag/v0.1.0-pre-region)
+- v0.2.0 は最終確認待ちの Release 下書きとして準備中です。配布候補:
+  - Windows: `obs-auto-stop-v0.2.0-windows-x64.zip`
+  - Linux: `obs-auto-stop-v0.2.0-linux-x64.zip`
+  - 整合性確認用: `SHA256SUMS.txt`
 
 ## 実装済み
 
@@ -63,7 +65,7 @@ English: External OBS Studio plugin that can auto-stop recording on a max timer 
 
 録画保存先フォルダは、組み合わせ行右のフォルダアイコンから開けます。
 
-フロート表示中のドックは **「タスクバーに最小化」**（またはタイトルバーの最小化）でタスクバーへ収納できます。ドック表示のままでは最小化できません。
+フロート表示中のドックは **「タスクバーに最小化」**（またはタイトルバーの最小化）でタスクバーへ収納できます。Windows では独立したウィンドウとして復帰できます。ドック収納中に押すと、フロート表示を促す案内が出ます。
 
 Dock 名: **OBS Auto Stop**
 
@@ -147,7 +149,7 @@ OBS SDK が見つからない場合、CMake は警告を出してプラグイン
 
 Qt Widgets が必要です（Dock UI 用）。
 
-CI（`.github/workflows/build-windows.yml`）は main への push・PR・手動実行で、Linux（`-Werror`）と Windows x64 をビルドします。Windows 版は artifact `obs-auto-stop-windows`（`obs-auto-stop-v<version>-windows-x64.zip`）として保存されます。
+CI（`.github/workflows/build-windows.yml`）は main への push・PR・手動実行で、Linux（`-Werror`）と Windows x64 をビルドします。両版を artifact `obs-auto-stop-linux` / `obs-auto-stop-windows` に zip として保存します。両 zip にロケールとライセンスを同梱しています。
 
 ## 開発・検証メモ
 

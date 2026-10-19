@@ -2,6 +2,8 @@
 
 確認日: 2026-10-19 (Asia/Tokyo)
 
+この文書は修正前の初回検証です。最小化修正後の再検証・旧版との比較・Release 準備の状態は [V0.2.0-VALIDATION.md](V0.2.0-VALIDATION.md) を参照してください。
+
 ## 導入状態
 
 - 対象: https://github.com/yuuki-ama1015/obs-auto-stop
