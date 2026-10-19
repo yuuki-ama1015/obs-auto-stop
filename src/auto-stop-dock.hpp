@@ -28,6 +28,13 @@ public:
 		     StopController *stop, QWidget *parent = nullptr);
 	~AutoStopDock() override;
 
+	// Re-read settings from the (possibly new) profile config.
+	void reloadSettings() { loadSettings(); }
+	// Write a pending debounced save right now (profile switch, shutdown).
+	void flushPendingSave();
+	// Show that OBS_AUTOSTOP_* environment overrides are in effect.
+	void setEnvOverrideActive(bool active);
+
 private slots:
 	void onAutoStopToggled(bool enabled);
 	void onMaxMinutesChanged(int minutes);
@@ -47,8 +54,31 @@ private slots:
 	void onOpenRecordingFolder();
 
 private:
+	struct Settings {
+		bool timerEnabled = true;
+		int maxMinutes = 120;
+		bool motionEnabled = false;
+		int inactivitySec = 15;
+		int minRecordingMin = 5;
+		bool regionEnabled = false;
+		int regionX = 0;
+		int regionY = 0;
+		int regionW = 100;
+		int regionH = 100;
+		bool mediaEndEnabled = false;
+		int combineMode = 0;
+		bool silenceEnabled = false;
+		int silenceSec = 15;
+		double silenceDb = -50.0;
+	};
+
 	void loadSettings();
-	void saveSettings() const;
+	static Settings readSettings();
+	void applySettingsToUi(const Settings &s);
+	void applySettingsToModel(const Settings &s);
+	void scheduleSave();
+	void saveSettingsNow();
+	void updateAndWarning();
 	void updateRegionControlsEnabled();
 	void updateRegionStatusLabel();
 	void applyMinRecordingToAll(int minutes);
@@ -87,7 +117,11 @@ private:
 	QToolButton *openFolderButton_ = nullptr;
 	QPushButton *minimizeButton_ = nullptr;
 	QTimer *refreshTimer_ = nullptr;
+	QTimer *saveTimer_ = nullptr;
+	QLabel *warningLabel_ = nullptr;
+	QLabel *envLabel_ = nullptr;
 
+	bool settingsLoaded_ = false;
 	int regionX_ = 0;
 	int regionY_ = 0;
 	int regionW_ = 100;

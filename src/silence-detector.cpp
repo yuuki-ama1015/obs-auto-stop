@@ -5,7 +5,15 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
+
+namespace {
+int64_t steadyNowNs()
+{
+	return std::chrono::duration_cast<std::chrono::nanoseconds>(
+		       std::chrono::steady_clock::now().time_since_epoch())
+		.count();
+}
+} // namespace
 
 SilenceDetector::~SilenceDetector()
 {
@@ -35,13 +43,8 @@ void SilenceDetector::setSilenceDuration(seconds duration)
 
 void SilenceDetector::setThresholdDb(double db)
 {
-	if (db > 0.0) {
-		db = 0.0;
-	}
-	if (db < -100.0) {
-		db = -100.0;
-	}
-	threshold_db_ = db;
+	threshold_db_ = std::max(-100.0, std::min(0.0, db));
+	threshold_linear_.store(static_cast<float>(std::pow(10.0, threshold_db_ / 20.0)));
 }
 
 void SilenceDetector::setMinimumRecordingDuration(seconds duration)
@@ -54,32 +57,35 @@ void SilenceDetector::setMinimumRecordingDuration(seconds duration)
 
 double SilenceDetector::lastLevelDb() const
 {
-	std::lock_guard<std::mutex> lock(mutex_);
-	return last_level_db_;
+	const float peak = last_peak_.load();
+	if (peak < 1.0e-6f) {
+		return -120.0;
+	}
+	return 20.0 * std::log10(static_cast<double>(peak));
 }
 
 SilenceDetector::seconds SilenceDetector::silenceActiveDuration() const
 {
-	std::lock_guard<std::mutex> lock(mutex_);
-	if (!silence_active_) {
+	const int64_t since = silence_since_ns_.load();
+	if (since == 0) {
 		return seconds{0};
 	}
-	return std::chrono::duration_cast<seconds>(clock::now() -
-						   silence_started_);
+	return std::chrono::duration_cast<seconds>(
+		std::chrono::nanoseconds{std::max<int64_t>(0, steadyNowNs() - since)});
 }
 
 bool SilenceDetector::shouldAutoStop(seconds recordingElapsed) const
 {
-	std::lock_guard<std::mutex> lock(mutex_);
-	if (!enabled_ || !monitoring_ || !silence_active_) {
+	if (!enabled_ || !monitoring_ || paused_) {
 		return false;
 	}
 	if (recordingElapsed < min_recording_duration_) {
 		return false;
 	}
-	const auto elapsed = std::chrono::duration_cast<seconds>(
-		clock::now() - silence_started_);
-	return elapsed >= silence_duration_;
+	if (silence_since_ns_.load() == 0) {
+		return false;
+	}
+	return silenceActiveDuration() >= silence_duration_;
 }
 
 void SilenceDetector::onRecordingStarted()
@@ -133,10 +139,8 @@ void SilenceDetector::onRecordingStopped()
 
 void SilenceDetector::resetSilence()
 {
-	std::lock_guard<std::mutex> lock(mutex_);
-	silence_active_ = false;
-	silence_started_ = clock::time_point{};
-	last_level_db_ = -120.0;
+	silence_since_ns_.store(0);
+	last_peak_.store(0.0f);
 }
 
 void SilenceDetector::ensureCallbackRegistered()
@@ -144,19 +148,17 @@ void SilenceDetector::ensureCallbackRegistered()
 	if (callback_registered_) {
 		return;
 	}
-	struct audio_convert_info info {};
-	info.format = AUDIO_FORMAT_FLOAT_PLANAR;
-	info.speakers = SPEAKERS_STEREO;
-	info.samples_per_sec = 48000;
 	audio_t *audio = obs_get_audio();
-	if (audio) {
-		const struct audio_output_info *aoi = audio_output_get_info(audio);
-		if (aoi) {
-			info.speakers = aoi->speakers;
-			info.samples_per_sec = aoi->samples_per_sec;
-		}
+	if (!audio) {
+		return;
 	}
-	obs_add_raw_audio_callback(0, &info, rawAudioCallback, this);
+	channels_ = audio_output_get_channels(audio);
+	if (channels_ == 0 || channels_ > MAX_AV_PLANES) {
+		channels_ = std::min<size_t>(std::max<size_t>(channels_, 1), MAX_AV_PLANES);
+	}
+	// NULL conversion: OBS mixes are already planar float at the output
+	// rate, so no resampler is created.
+	obs_add_raw_audio_callback(0, nullptr, rawAudioCallback, this);
 	callback_registered_ = true;
 }
 
@@ -165,52 +167,41 @@ void SilenceDetector::ensureCallbackRemoved()
 	if (!callback_registered_) {
 		return;
 	}
+	// audio_output_disconnect() synchronizes with the audio thread, so the
+	// callback is not running once this returns.
 	obs_remove_raw_audio_callback(0, rawAudioCallback, this);
 	callback_registered_ = false;
 }
 
-double SilenceDetector::peakDbFromAudio(const struct audio_data *data)
+float SilenceDetector::peakFromAudio(const struct audio_data *data,
+				     size_t channels)
 {
-	if (!data || data->frames == 0 || !data->data[0]) {
-		return -120.0;
-	}
-	const float *samples = reinterpret_cast<const float *>(data->data[0]);
 	float peak = 0.0f;
-	for (uint32_t i = 0; i < data->frames; ++i) {
-		peak = std::max(peak, std::fabs(samples[i]));
-	}
-	// Also peek other planes if present
-	for (size_t ch = 1; ch < MAX_AV_PLANES; ++ch) {
-		if (!data->data[ch]) {
+	for (size_t ch = 0; ch < channels; ++ch) {
+		const auto *s = reinterpret_cast<const float *>(data->data[ch]);
+		if (!s) {
 			break;
 		}
-		const float *s = reinterpret_cast<const float *>(data->data[ch]);
 		for (uint32_t i = 0; i < data->frames; ++i) {
 			peak = std::max(peak, std::fabs(s[i]));
 		}
 	}
-	if (peak < 1.0e-8f) {
-		return -120.0;
-	}
-	return 20.0 * std::log10(static_cast<double>(peak));
+	return peak;
 }
 
-void SilenceDetector::onAudio(struct audio_data *data)
+void SilenceDetector::onAudio(const struct audio_data *data)
 {
-	if (!enabled_ || !monitoring_ || !data) {
+	if (!data || data->frames == 0) {
 		return;
 	}
-	const double level = peakDbFromAudio(data);
-	std::lock_guard<std::mutex> lock(mutex_);
-	last_level_db_ = level;
-	if (level <= threshold_db_) {
-		if (!silence_active_) {
-			silence_active_ = true;
-			silence_started_ = clock::now();
+	const float peak = peakFromAudio(data, channels_);
+	last_peak_.store(peak, std::memory_order_relaxed);
+	if (peak <= threshold_linear_.load(std::memory_order_relaxed)) {
+		if (silence_since_ns_.load(std::memory_order_relaxed) == 0) {
+			silence_since_ns_.store(steadyNowNs());
 		}
 	} else {
-		silence_active_ = false;
-		silence_started_ = clock::time_point{};
+		silence_since_ns_.store(0);
 	}
 }
 
