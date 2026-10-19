@@ -12,6 +12,7 @@
 #include <QTimer>
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 
 OBS_DECLARE_MODULE()
@@ -29,6 +30,14 @@ AutoStopDock *g_dock = nullptr;
 // events and the dock), so RecordingMonitor/StopController need no locking.
 QTimer *g_eval_timer = nullptr;
 constexpr int kEvalIntervalMs = 250;
+// Warn once if stillness detection gets no frames for ~10 s.
+constexpr int kNoFrameWarnEvals = 10000 / kEvalIntervalMs;
+int g_motion_no_frame_evals = 0;
+bool g_motion_no_frame_warned = false;
+// Set once OBS starts shutting down the frontend; after OBS_FRONTEND_EVENT_EXIT
+// the frontend API is gone and must not be called (e.g. from unload).
+bool g_shutting_down = false;
+bool g_frontend_gone = false;
 
 // Remember OBS_AUTOSTOP_* env overrides so they can win over profile
 // loadSettings() which runs later when the dock is created.
@@ -66,6 +75,19 @@ void applyEnvOverrides()
 	}
 }
 
+bool anyEnvOverride()
+{
+	return g_env.max_seconds || g_env.inactivity_seconds ||
+	       g_env.min_recording_seconds || g_env.motion;
+}
+
+void stopAllDetectors()
+{
+	g_motion.onRecordingStopped();
+	g_media.onRecordingStopped();
+	g_silence.onRecordingStopped();
+}
+
 void evaluateStopConditions();
 
 void startEvalTimer()
@@ -98,6 +120,8 @@ void onFrontendEvent(enum obs_frontend_event event, void *)
 	switch (event) {
 	case OBS_FRONTEND_EVENT_RECORDING_STARTED:
 		g_stop.clearStopRequested();
+		g_motion_no_frame_evals = 0;
+		g_motion_no_frame_warned = false;
 		g_motion.onRecordingStarted();
 		g_media.onRecordingStarted();
 		g_silence.onRecordingStarted();
@@ -111,10 +135,31 @@ void onFrontendEvent(enum obs_frontend_event event, void *)
 		g_silence.onRecordingResumed();
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STOPPED:
-		g_motion.onRecordingStopped();
-		g_media.onRecordingStopped();
-		g_silence.onRecordingStopped();
+		stopAllDetectors();
 		g_stop.clearStopRequested();
+		break;
+	case OBS_FRONTEND_EVENT_SCENE_CHANGED:
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
+		// Follow the program scene (no-op unless media-end is watching).
+		if (!g_shutting_down) {
+			g_media.onSceneChanged();
+		}
+		break;
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP:
+		// Sources are about to be released: drop our references first.
+		g_media.releaseAll();
+		break;
+	case OBS_FRONTEND_EVENT_PROFILE_CHANGING:
+		if (g_dock) {
+			g_dock->flushPendingSave();
+		}
+		break;
+	case OBS_FRONTEND_EVENT_PROFILE_CHANGED:
+		if (g_dock) {
+			g_dock->reloadSettings();
+			applyEnvOverrides();
+			blog(LOG_INFO, "OBS Auto Stop: settings reloaded for new profile");
+		}
 		break;
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 		if (!g_dock) {
@@ -123,15 +168,50 @@ void onFrontendEvent(enum obs_frontend_event event, void *)
 			// Dock ctor calls loadSettings() and would clobber env;
 			// re-apply so OBS_AUTOSTOP_* still wins when set.
 			applyEnvOverrides();
-			obs_frontend_add_dock_by_id("obs-auto-stop-dock",
-						    "OBS Auto Stop", g_dock);
-			blog(LOG_INFO, "OBS Auto Stop: dock registered");
+			g_dock->setEnvOverrideActive(anyEnvOverride());
+			if (obs_frontend_add_dock_by_id("obs-auto-stop-dock",
+							"OBS Auto Stop", g_dock)) {
+				blog(LOG_INFO, "OBS Auto Stop: dock registered");
+			} else {
+				blog(LOG_WARNING, "OBS Auto Stop: dock registration failed");
+				delete g_dock;
+				g_dock = nullptr;
+			}
 		}
 		startEvalTimer();
+		break;
+	case OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN:
+		// Earliest shutdown notification: the frontend API and all sources
+		// are still alive. Release everything here, not in module unload.
+		g_shutting_down = true;
+		stopEvalTimer();
+		if (g_dock) {
+			g_dock->flushPendingSave();
+		}
+		stopAllDetectors();
+		break;
+	case OBS_FRONTEND_EVENT_EXIT:
+		g_frontend_gone = true;
+		stopAllDetectors();
+		// The dock is owned (and destroyed) by the OBS main window.
+		g_dock = nullptr;
 		break;
 	default:
 		break;
 	}
+}
+
+void requestStopWithDetails(const char *reason)
+{
+	char buf[256];
+	std::snprintf(buf, sizeof(buf),
+		      "%s; elapsed %lld s, still %lld s, silence %lld s, media '%s'",
+		      reason,
+		      static_cast<long long>(g_monitor.elapsedRecordingTime().count()),
+		      static_cast<long long>(g_motion.stillnessDuration().count()),
+		      static_cast<long long>(g_silence.silenceActiveDuration().count()),
+		      g_media.endedSourceName().c_str());
+	g_stop.requestStop(buf);
 }
 
 void evaluateStopConditions()
@@ -146,11 +226,22 @@ void evaluateStopConditions()
 
 	// Max-duration timer is always a hard stop when enabled (not part of AND).
 	if (g_monitor.isEnabled() && g_monitor.hasReachedMaxDuration()) {
-		g_stop.requestStop("max recording duration reached");
+		requestStopWithDetails("max recording duration reached");
 		return;
 	}
 
 	const auto elapsed = g_monitor.elapsedRecordingTime();
+
+	if (g_motion.isMonitoring() && g_motion.sampleCount() == 0) {
+		if (++g_motion_no_frame_evals >= kNoFrameWarnEvals &&
+		    !g_motion_no_frame_warned) {
+			g_motion_no_frame_warned = true;
+			blog(LOG_WARNING,
+			     "OBS Auto Stop: stillness detection has received no frames for 10 s");
+		}
+	} else {
+		g_motion_no_frame_evals = 0;
+	}
 
 	const bool motion_on = g_motion.isEnabled();
 	const bool media_on = g_media.isEnabled();
@@ -176,21 +267,21 @@ void evaluateStopConditions()
 		if (silence_on && !silence_hit) {
 			return;
 		}
-		g_stop.requestStop("all enabled conditions met (AND)");
+		requestStopWithDetails("all enabled conditions met (AND)");
 		return;
 	}
 
 	// OR (default): any one enabled condition is enough.
 	if (motion_hit) {
-		g_stop.requestStop("video inactivity duration reached");
+		requestStopWithDetails("video inactivity duration reached");
 		return;
 	}
 	if (media_hit) {
-		g_stop.requestStop("media source ended");
+		requestStopWithDetails("media source ended");
 		return;
 	}
 	if (silence_hit) {
-		g_stop.requestStop("audio silence duration reached");
+		requestStopWithDetails("audio silence duration reached");
 	}
 }
 
@@ -205,7 +296,9 @@ int envLong(const char *name, int *out)
 	if (end == value || parsed < 0) {
 		return -1;
 	}
-	*out = static_cast<int>(parsed);
+	// Clamp to ~10 days so the int / seconds math cannot overflow.
+	constexpr long kMaxSeconds = 10L * 24 * 3600;
+	*out = static_cast<int>(parsed > kMaxSeconds ? kMaxSeconds : parsed);
 	return 0;
 }
 
@@ -261,14 +354,15 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	stopEvalTimer();
-	obs_frontend_remove_event_callback(onFrontendEvent, nullptr);
-	g_motion.onRecordingStopped();
-	g_media.onRecordingStopped();
-	g_silence.onRecordingStopped();
-
-	if (g_dock) {
-		obs_frontend_remove_dock("obs-auto-stop-dock");
-		g_dock = nullptr;
+	stopAllDetectors();
+	// After OBS_FRONTEND_EVENT_EXIT the frontend API is torn down; calling
+	// it here would only log "no callbacks" warnings.
+	if (!g_frontend_gone) {
+		obs_frontend_remove_event_callback(onFrontendEvent, nullptr);
+		if (g_dock) {
+			obs_frontend_remove_dock("obs-auto-stop-dock");
+			g_dock = nullptr;
+		}
 	}
 
 	blog(LOG_INFO, "OBS Auto Stop plugin unloaded");

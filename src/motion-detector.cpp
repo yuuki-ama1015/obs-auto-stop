@@ -148,6 +148,7 @@ void MotionDetector::requestReset()
 {
 	still_since_ns_.store(0);
 	last_motion_percent_.store(0.0);
+	sample_count_.store(0);
 	reset_generation_.fetch_add(1);
 }
 
@@ -237,6 +238,7 @@ void MotionDetector::ensureCallbackRegistered()
 	last_frame_ts_ = 0;
 	last_sample_ts_ = 0;
 	have_prev_ = false;
+	have_ref_ = false;
 	seen_generation_ = reset_generation_.load();
 	obs_add_main_rendered_callback(renderedCallback, this);
 	callback_registered_ = true;
@@ -256,7 +258,10 @@ void MotionDetector::ensureCallbackRemoved()
 	prev_luma_.shrink_to_fit();
 	cur_luma_.clear();
 	cur_luma_.shrink_to_fit();
+	ref_luma_.clear();
+	ref_luma_.shrink_to_fit();
 	have_prev_ = false;
+	have_ref_ = false;
 }
 
 void MotionDetector::destroyGraphics()
@@ -302,6 +307,7 @@ void MotionDetector::onRendered()
 	if (gen != seen_generation_) {
 		seen_generation_ = gen;
 		have_prev_ = false;
+		have_ref_ = false;
 		staged_[0] = staged_[1] = false; // staged before the reset
 		still_since_ns_.store(0);
 	}
@@ -385,13 +391,25 @@ void MotionDetector::analyzeMapped(const uint8_t *rgba, uint32_t linesize)
 	}
 
 	if (have_prev_ && prev_luma_.size() == count) {
-		const double motion =
+		const double sens = sensitivity_percent_.load();
+		double motion =
 			changedPixelPercent(prev_luma_.data(), cur_luma_.data(), count);
+		if (motion < sens && have_ref_ && ref_luma_.size() == count) {
+			// Catch slow drifts (fades, slow scrolls) against the frame
+			// where stillness began.
+			motion = std::max(motion, changedPixelPercent(ref_luma_.data(),
+								     cur_luma_.data(), count));
+		}
 		last_motion_percent_.store(motion);
-		if (motion >= sensitivity_percent_.load()) {
+		if (motion >= sens) {
 			still_since_ns_.store(0);
-		} else if (still_since_ns_.load() == 0) {
-			still_since_ns_.store(steadyNowNs());
+			have_ref_ = false;
+		} else if (still_since_ns_.load() == 0 || !have_ref_) {
+			if (still_since_ns_.load() == 0) {
+				still_since_ns_.store(steadyNowNs());
+			}
+			ref_luma_ = cur_luma_;
+			have_ref_ = true;
 		}
 
 		const uint64_t now = obs_get_video_frame_time();
@@ -399,10 +417,11 @@ void MotionDetector::analyzeMapped(const uint8_t *rgba, uint32_t linesize)
 			last_debug_log_ts_ = now;
 			blog(LOG_DEBUG,
 			     "OBS Auto Stop: motion=%.2f%% sens=%.2f%% still=%lld s",
-			     motion, sensitivity_percent_.load(),
+			     motion, sens,
 			     static_cast<long long>(stillnessDuration().count()));
 		}
 	}
+	sample_count_.fetch_add(1, std::memory_order_relaxed);
 
 	prev_luma_.swap(cur_luma_);
 	have_prev_ = true;
