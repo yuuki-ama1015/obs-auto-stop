@@ -29,10 +29,12 @@
 #include <QPushButton>
 #include <QShowEvent>
 #include <QMessageBox>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <string>
@@ -189,6 +191,14 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	motionLabel_ = new QLabel(QStringLiteral("静止時間: 0 / — 秒"), this);
 	mediaLabel_ = new QLabel(QStringLiteral("メディア終了: —"), this);
 	silenceLabel_ = new QLabel(QStringLiteral("無音時間: —"), this);
+	warningLabel_ = new QLabel(this);
+	warningLabel_->setWordWrap(true);
+	warningLabel_->setStyleSheet(QStringLiteral("color: #e0a030;"));
+	warningLabel_->hide();
+	envLabel_ = new QLabel(this);
+	envLabel_->setWordWrap(true);
+	envLabel_->setStyleSheet(QStringLiteral("color: palette(mid);"));
+	envLabel_->hide();
 
 	// Order: combine mode → hint → media end → timer → motion → silence → status → minimize
 	auto *combineRow = new QHBoxLayout;
@@ -219,6 +229,8 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->addWidget(motionLabel_);
 	layout->addWidget(mediaLabel_);
 	layout->addWidget(silenceLabel_);
+	layout->addWidget(warningLabel_);
+	layout->addWidget(envLabel_);
 
 	minimizeButton_ = new QPushButton(QStringLiteral("タスクバーに最小化"), this);
 	minimizeButton_->setToolTip(QStringLiteral(
@@ -266,19 +278,45 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 		&AutoStopDock::refreshStatus);
 	refreshTimer_->start();
 
+	// Coalesce rapid edits (spin box auto-repeat, typing) into one write.
+	saveTimer_ = new QTimer(this);
+	saveTimer_->setSingleShot(true);
+	saveTimer_->setInterval(500);
+	connect(saveTimer_, &QTimer::timeout, this,
+		&AutoStopDock::saveSettingsNow);
+
 	loadSettings();
-	updateCombineHint();
 	refreshStatus();
 }
 
 AutoStopDock::~AutoStopDock() = default;
+
+void AutoStopDock::scheduleSave()
+{
+	saveTimer_->start();
+}
+
+void AutoStopDock::flushPendingSave()
+{
+	if (saveTimer_ && saveTimer_->isActive()) {
+		saveTimer_->stop();
+		saveSettingsNow();
+	}
+}
+
+void AutoStopDock::setEnvOverrideActive(bool active)
+{
+	envLabel_->setText(QStringLiteral(
+		"環境変数 OBS_AUTOSTOP_* で一部の設定を上書き中です（表示は保存値）"));
+	envLabel_->setVisible(active);
+}
 
 void AutoStopDock::onAutoStopToggled(bool enabled)
 {
 	if (monitor_) {
 		monitor_->setEnabled(enabled);
 	}
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onMaxMinutesChanged(int minutes)
@@ -287,7 +325,7 @@ void AutoStopDock::onMaxMinutesChanged(int minutes)
 		monitor_->setMaxRecordingDuration(
 			std::chrono::seconds{static_cast<int64_t>(minutes) * 60});
 	}
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onMotionToggled(bool enabled)
@@ -296,7 +334,7 @@ void AutoStopDock::onMotionToggled(bool enabled)
 		motion_->setEnabled(enabled);
 	}
 	updateRegionControlsEnabled();
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onInactivitySecondsChanged(int seconds)
@@ -304,7 +342,7 @@ void AutoStopDock::onInactivitySecondsChanged(int seconds)
 	if (motion_) {
 		motion_->setInactivityDuration(std::chrono::seconds{seconds});
 	}
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onSensitivityChanged(double percent)
@@ -333,7 +371,7 @@ void AutoStopDock::applyMinRecordingToAll(int minutes)
 void AutoStopDock::onMinRecordingMinutesChanged(int minutes)
 {
 	applyMinRecordingToAll(minutes);
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onMediaEndToggled(bool enabled)
@@ -341,7 +379,7 @@ void AutoStopDock::onMediaEndToggled(bool enabled)
 	if (media_) {
 		media_->setEnabled(enabled);
 	}
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onSilenceToggled(bool enabled)
@@ -349,7 +387,7 @@ void AutoStopDock::onSilenceToggled(bool enabled)
 	if (silence_) {
 		silence_->setEnabled(enabled);
 	}
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onSilenceSecondsChanged(int seconds)
@@ -357,7 +395,7 @@ void AutoStopDock::onSilenceSecondsChanged(int seconds)
 	if (silence_) {
 		silence_->setSilenceDuration(std::chrono::seconds{seconds});
 	}
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onSilenceThresholdChanged(double db)
@@ -365,7 +403,7 @@ void AutoStopDock::onSilenceThresholdChanged(double db)
 	if (silence_) {
 		silence_->setThresholdDb(db);
 	}
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onRegionToggled(bool enabled)
@@ -374,7 +412,7 @@ void AutoStopDock::onRegionToggled(bool enabled)
 		motion_->setRegionEnabled(enabled);
 	}
 	updateRegionControlsEnabled();
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::onSelectRegionClicked()
@@ -402,7 +440,7 @@ void AutoStopDock::onSelectRegionClicked()
 	}
 
 	updateRegionStatusLabel();
-	saveSettings();
+	scheduleSave();
 }
 
 void AutoStopDock::updateRegionControlsEnabled()
@@ -428,26 +466,33 @@ void AutoStopDock::updateRegionStatusLabel()
 
 void AutoStopDock::refreshStatus()
 {
-	if (!monitor_) {
+	if (!monitor_ || !isVisible()) {
 		return;
 	}
 
 	const auto elapsed = monitor_->elapsedRecordingTime().count();
 	const auto maxSec = monitor_->maxRecordingDuration().count();
 
-	if (!monitor_->isEnabled()) {
+	const bool anyOn = monitor_->isEnabled() ||
+			   (motion_ && motion_->isEnabled()) ||
+			   (media_ && media_->isEnabled()) ||
+			   (silence_ && silence_->isEnabled());
+	if (!anyOn) {
 		statusLabel_->setText(
 			QStringLiteral("プラグインステータス: 自動停止 OFF"));
-	} else if (monitor_->isRecording()) {
-		statusLabel_->setText(QStringLiteral("プラグインステータス: 録画中"));
+	} else if (monitor_->isPaused()) {
+		statusLabel_->setText(
+			QStringLiteral("プラグインステータス: 一時停止中"));
 	} else if (stop_ && stop_->stopRequested()) {
 		statusLabel_->setText(
 			QStringLiteral("プラグインステータス: 自動停止要求中"));
+	} else if (monitor_->isRecording()) {
+		statusLabel_->setText(QStringLiteral("プラグインステータス: 録画中"));
 	} else {
 		statusLabel_->setText(QStringLiteral("プラグインステータス: 待機中"));
 	}
 
-	if (maxSec > 0) {
+	if (monitor_->isEnabled() && maxSec > 0) {
 		elapsedLabel_->setText(
 			QStringLiteral("経過時間: %1 / %2 秒")
 				.arg(static_cast<qlonglong>(elapsed))
@@ -487,8 +532,12 @@ void AutoStopDock::refreshStatus()
 			mediaLabel_->setText(
 				QStringLiteral("メディア終了: 検知 (%1)")
 					.arg(QString::fromStdString(name)));
+		} else if (media_->isMonitoring()) {
+			mediaLabel_->setText(
+				QStringLiteral("メディア終了: 監視中 (%1 件)")
+					.arg(static_cast<qulonglong>(media_->watchedCount())));
 		} else {
-			mediaLabel_->setText(QStringLiteral("メディア終了: 監視中"));
+			mediaLabel_->setText(QStringLiteral("メディア終了: 録画開始で監視"));
 		}
 	} else {
 		mediaLabel_->setText(QStringLiteral("メディア終了: —"));
@@ -505,226 +554,151 @@ void AutoStopDock::refreshStatus()
 	} else {
 		silenceLabel_->setText(QStringLiteral("無音時間: —"));
 	}
+
+	updateAndWarning();
+}
+
+void AutoStopDock::updateAndWarning()
+{
+	// AND needs every enabled condition; media-end can never be met when
+	// no (non-looping) media source is being watched.
+	const bool andMode = stop_ && stop_->combineMode() == StopCombineMode::And;
+	const bool unsatisfiable = andMode && media_ && media_->isEnabled() &&
+				   media_->isMonitoring() &&
+				   media_->watchedCount() == 0;
+	if (unsatisfiable) {
+		warningLabel_->setText(QStringLiteral(
+			"⚠ 「かつ」: 監視できるメディアソース（ループOFF）が番組シーンにないため、静止・無音・メディア終了の条件は成立しません（タイマーは有効）"));
+	}
+	warningLabel_->setVisible(unsatisfiable);
+}
+
+namespace {
+template<typename T> T clampTo(T v, T lo, T hi)
+{
+	return std::max(lo, std::min(hi, v));
+}
+} // namespace
+
+AutoStopDock::Settings AutoStopDock::readSettings()
+{
+	Settings s;
+	config_t *config = obs_frontend_get_profile_config();
+	if (!config) {
+		return s;
+	}
+	auto readBool = [&](const char *key, bool def) {
+		config_set_default_bool(config, kConfigSection, key, def);
+		return config_get_bool(config, kConfigSection, key);
+	};
+	auto readInt = [&](const char *key, int def, int lo, int hi) {
+		config_set_default_int(config, kConfigSection, key, def);
+		const int64_t v = config_get_int(config, kConfigSection, key);
+		return static_cast<int>(clampTo<int64_t>(v, lo, hi));
+	};
+
+	s.timerEnabled = readBool(kKeyEnabled, true);
+	s.maxMinutes = readInt(kKeyMaxMinutes, kDefaultMaxMinutes, 0, 999);
+	s.motionEnabled = readBool(kKeyMotionEnabled, false);
+	s.inactivitySec = readInt(kKeyInactivitySec, kDefaultInactivitySec, 1, 600);
+	s.minRecordingMin = readInt(kKeyMinRecordingMin, kDefaultMinRecordingMin, 0, 120);
+	s.regionEnabled = readBool(kKeyRegionEnabled, false);
+	s.regionX = readInt(kKeyRegionX, 0, 0, 99);
+	s.regionY = readInt(kKeyRegionY, 0, 0, 99);
+	s.regionW = readInt(kKeyRegionW, 100, 1, 100);
+	s.regionH = readInt(kKeyRegionH, 100, 1, 100);
+	s.mediaEndEnabled = readBool(kKeyMediaEndEnabled, false);
+	s.combineMode = readInt(kKeyCombineMode, 0, 0, 1);
+	s.silenceEnabled = readBool(kKeySilenceEnabled, false);
+	s.silenceSec = readInt(kKeySilenceSec, kDefaultSilenceSec, 1, 600);
+	config_set_default_double(config, kConfigSection, kKeySilenceThresholdDb,
+				  kDefaultSilenceThresholdDb);
+	s.silenceDb = clampTo(config_get_double(config, kConfigSection,
+						kKeySilenceThresholdDb),
+			      -100.0, 0.0);
+	// Stillness sensitivity is session-only and always starts at default.
+	return s;
+}
+
+void AutoStopDock::applySettingsToUi(const Settings &s)
+{
+	const QSignalBlocker b1(autoStopCheck_), b2(maxMinutesSpin_),
+		b3(motionCheck_), b4(inactivitySpin_), b5(sensitivitySpin_),
+		b6(minRecordingSpin_), b7(regionCheck_), b8(mediaEndCheck_),
+		b9(combineModeCombo_), b10(silenceCheck_), b11(silenceSpin_),
+		b12(silenceThresholdSpin_);
+
+	autoStopCheck_->setChecked(s.timerEnabled);
+	maxMinutesSpin_->setValue(s.maxMinutes);
+	motionCheck_->setChecked(s.motionEnabled);
+	inactivitySpin_->setValue(s.inactivitySec);
+	if (!settingsLoaded_) {
+		// Session-only: start at default, keep the value across profiles.
+		sensitivitySpin_->setValue(kDefaultSensitivity);
+	}
+	minRecordingSpin_->setValue(s.minRecordingMin);
+	regionCheck_->setChecked(s.regionEnabled);
+	mediaEndCheck_->setChecked(s.mediaEndEnabled);
+	const int combineIdx = combineModeCombo_->findData(s.combineMode);
+	combineModeCombo_->setCurrentIndex(combineIdx >= 0 ? combineIdx : 0);
+	silenceCheck_->setChecked(s.silenceEnabled);
+	silenceSpin_->setValue(s.silenceSec);
+	silenceThresholdSpin_->setValue(s.silenceDb);
+}
+
+void AutoStopDock::applySettingsToModel(const Settings &s)
+{
+	const auto minRec =
+		std::chrono::seconds{static_cast<int64_t>(s.minRecordingMin) * 60};
+	if (monitor_) {
+		monitor_->setEnabled(s.timerEnabled);
+		monitor_->setMaxRecordingDuration(
+			std::chrono::seconds{static_cast<int64_t>(s.maxMinutes) * 60});
+	}
+	if (stop_) {
+		stop_->setCombineMode(static_cast<StopCombineMode>(s.combineMode));
+	}
+	if (motion_) {
+		motion_->setInactivityDuration(std::chrono::seconds{s.inactivitySec});
+		motion_->setSensitivityPercent(sensitivitySpin_->value());
+		motion_->setMinimumRecordingDuration(minRec);
+		motion_->setRegionEnabled(s.regionEnabled);
+		motion_->setRegionPercent(s.regionX, s.regionY, s.regionW, s.regionH);
+		motion_->regionPercent(regionX_, regionY_, regionW_, regionH_);
+		motion_->setEnabled(s.motionEnabled);
+	} else {
+		regionX_ = s.regionX;
+		regionY_ = s.regionY;
+		regionW_ = s.regionW;
+		regionH_ = s.regionH;
+	}
+	if (media_) {
+		media_->setMinimumRecordingDuration(minRec);
+		media_->setEnabled(s.mediaEndEnabled);
+	}
+	if (silence_) {
+		silence_->setSilenceDuration(std::chrono::seconds{s.silenceSec});
+		silence_->setThresholdDb(s.silenceDb);
+		silence_->setMinimumRecordingDuration(minRec);
+		silence_->setEnabled(s.silenceEnabled);
+	}
 }
 
 void AutoStopDock::loadSettings()
 {
-	config_t *config = obs_frontend_get_profile_config();
-
-	auto applyDefaults = [&]() {
-		autoStopCheck_->setChecked(true);
-		maxMinutesSpin_->setValue(kDefaultMaxMinutes);
-		motionCheck_->setChecked(false);
-		inactivitySpin_->setValue(kDefaultInactivitySec);
-		sensitivitySpin_->setValue(kDefaultSensitivity);
-		minRecordingSpin_->setValue(kDefaultMinRecordingMin);
-		regionCheck_->setChecked(false);
-		regionX_ = 0;
-		regionY_ = 0;
-		regionW_ = 100;
-		regionH_ = 100;
-		mediaEndCheck_->setChecked(false);
-		silenceCheck_->setChecked(false);
-		silenceSpin_->setValue(kDefaultSilenceSec);
-		silenceThresholdSpin_->setValue(kDefaultSilenceThresholdDb);
-		if (monitor_) {
-			monitor_->setEnabled(true);
-			monitor_->setMaxRecordingDuration(
-				std::chrono::seconds{kDefaultMaxMinutes * 60});
-		}
-		if (motion_) {
-			motion_->setEnabled(false);
-			motion_->setInactivityDuration(
-				std::chrono::seconds{kDefaultInactivitySec});
-			motion_->setSensitivityPercent(kDefaultSensitivity);
-			motion_->setMinimumRecordingDuration(
-				std::chrono::seconds{kDefaultMinRecordingMin *
-						     60});
-			motion_->setRegionEnabled(false);
-			motion_->setRegionPercent(0, 0, 100, 100);
-		}
-		if (media_) {
-			media_->setEnabled(false);
-			media_->setMinimumRecordingDuration(
-				std::chrono::seconds{kDefaultMinRecordingMin *
-						     60});
-		}
-		if (silence_) {
-			silence_->setEnabled(false);
-			silence_->setSilenceDuration(
-				std::chrono::seconds{kDefaultSilenceSec});
-			silence_->setThresholdDb(kDefaultSilenceThresholdDb);
-			silence_->setMinimumRecordingDuration(
-				std::chrono::seconds{kDefaultMinRecordingMin *
-						     60});
-		}
-	};
-
-	if (!config) {
-		applyDefaults();
-		updateRegionStatusLabel();
-		updateRegionControlsEnabled();
-		return;
+	if (saveTimer_) {
+		saveTimer_->stop(); // never write old values into a new profile
 	}
-
-	config_set_default_bool(config, kConfigSection, kKeyEnabled, true);
-	config_set_default_int(config, kConfigSection, kKeyMaxMinutes,
-			       kDefaultMaxMinutes);
-	config_set_default_bool(config, kConfigSection, kKeyMotionEnabled,
-				false);
-	config_set_default_int(config, kConfigSection, kKeyInactivitySec,
-			       kDefaultInactivitySec);
-	config_set_default_double(config, kConfigSection, kKeySensitivity,
-				  kDefaultSensitivity);
-	config_set_default_int(config, kConfigSection, kKeyMinRecordingMin,
-			       kDefaultMinRecordingMin);
-	config_set_default_bool(config, kConfigSection, kKeyRegionEnabled,
-				false);
-	config_set_default_int(config, kConfigSection, kKeyRegionX, 0);
-	config_set_default_int(config, kConfigSection, kKeyRegionY, 0);
-	config_set_default_int(config, kConfigSection, kKeyRegionW, 100);
-	config_set_default_int(config, kConfigSection, kKeyRegionH, 100);
-	config_set_default_bool(config, kConfigSection, kKeyMediaEndEnabled,
-				false);
-	config_set_default_int(config, kConfigSection, kKeyCombineMode, 0);
-	config_set_default_bool(config, kConfigSection, kKeySilenceEnabled,
-				false);
-	config_set_default_int(config, kConfigSection, kKeySilenceSec,
-			       kDefaultSilenceSec);
-	config_set_default_double(config, kConfigSection,
-				  kKeySilenceThresholdDb,
-				  kDefaultSilenceThresholdDb);
-
-	const bool enabled =
-		config_get_bool(config, kConfigSection, kKeyEnabled);
-	int minutes = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeyMaxMinutes));
-	const bool motionEnabled =
-		config_get_bool(config, kConfigSection, kKeyMotionEnabled);
-	int inactivity = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeyInactivitySec));
-	// Stillness sensitivity always starts at the default each launch.
-	const double sensitivity = kDefaultSensitivity;
-	int minRecMin = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeyMinRecordingMin));
-	const bool regionEnabled =
-		config_get_bool(config, kConfigSection, kKeyRegionEnabled);
-	int rx = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeyRegionX));
-	int ry = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeyRegionY));
-	int rw = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeyRegionW));
-	int rh = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeyRegionH));
-	const bool mediaEndEnabled =
-		config_get_bool(config, kConfigSection, kKeyMediaEndEnabled);
-	int combineMode = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeyCombineMode));
-	if (combineMode != 0 && combineMode != 1) {
-		combineMode = 0;
-	}
-	const bool silenceEnabled =
-		config_get_bool(config, kConfigSection, kKeySilenceEnabled);
-	int silenceSec = static_cast<int>(
-		config_get_int(config, kConfigSection, kKeySilenceSec));
-	const double silenceDb = config_get_double(
-		config, kConfigSection, kKeySilenceThresholdDb);
-
-	if (minutes < 0)
-		minutes = 0;
-	if (minutes > 999)
-		minutes = 999;
-	if (inactivity < 1)
-		inactivity = 1;
-	if (minRecMin < 0)
-		minRecMin = 0;
-	if (silenceSec < 1)
-		silenceSec = 1;
-
-	const bool old1 = autoStopCheck_->blockSignals(true);
-	const bool old2 = maxMinutesSpin_->blockSignals(true);
-	const bool old3 = motionCheck_->blockSignals(true);
-	const bool old4 = inactivitySpin_->blockSignals(true);
-	const bool old5 = sensitivitySpin_->blockSignals(true);
-	const bool old6 = minRecordingSpin_->blockSignals(true);
-	const bool old7 = regionCheck_->blockSignals(true);
-	const bool old8 = mediaEndCheck_->blockSignals(true);
-	const bool oldCombine = combineModeCombo_->blockSignals(true);
-	const bool old9 = silenceCheck_->blockSignals(true);
-	const bool old10 = silenceSpin_->blockSignals(true);
-	const bool old11 = silenceThresholdSpin_->blockSignals(true);
-
-	autoStopCheck_->setChecked(enabled);
-	maxMinutesSpin_->setValue(minutes);
-	motionCheck_->setChecked(motionEnabled);
-	inactivitySpin_->setValue(inactivity);
-	sensitivitySpin_->setValue(sensitivity);
-	minRecordingSpin_->setValue(minRecMin);
-	regionCheck_->setChecked(regionEnabled);
-	regionX_ = rx;
-	regionY_ = ry;
-	regionW_ = rw;
-	regionH_ = rh;
-	mediaEndCheck_->setChecked(mediaEndEnabled);
-	const int combineIdx = combineModeCombo_->findData(combineMode);
-	combineModeCombo_->setCurrentIndex(combineIdx >= 0 ? combineIdx : 0);
-	if (stop_) {
-		stop_->setCombineMode(static_cast<StopCombineMode>(combineMode));
-	}
-	silenceCheck_->setChecked(silenceEnabled);
-	silenceSpin_->setValue(silenceSec);
-	silenceThresholdSpin_->setValue(silenceDb);
-
-	autoStopCheck_->blockSignals(old1);
-	maxMinutesSpin_->blockSignals(old2);
-	motionCheck_->blockSignals(old3);
-	inactivitySpin_->blockSignals(old4);
-	sensitivitySpin_->blockSignals(old5);
-	minRecordingSpin_->blockSignals(old6);
-	regionCheck_->blockSignals(old7);
-	mediaEndCheck_->blockSignals(old8);
-	combineModeCombo_->blockSignals(oldCombine);
-	silenceCheck_->blockSignals(old9);
-	silenceSpin_->blockSignals(old10);
-	silenceThresholdSpin_->blockSignals(old11);
-
-	if (monitor_) {
-		monitor_->setEnabled(enabled);
-		monitor_->setMaxRecordingDuration(
-			std::chrono::seconds{static_cast<int64_t>(minutes) * 60});
-	}
-	if (motion_) {
-		motion_->setEnabled(motionEnabled);
-		motion_->setInactivityDuration(std::chrono::seconds{inactivity});
-		motion_->setSensitivityPercent(sensitivity);
-		motion_->setMinimumRecordingDuration(
-			std::chrono::seconds{static_cast<int64_t>(minRecMin) *
-					     60});
-		motion_->setRegionEnabled(regionEnabled);
-		motion_->setRegionPercent(rx, ry, rw, rh);
-		motion_->regionPercent(regionX_, regionY_, regionW_, regionH_);
-	}
-	if (media_) {
-		media_->setEnabled(mediaEndEnabled);
-		media_->setMinimumRecordingDuration(
-			std::chrono::seconds{static_cast<int64_t>(minRecMin) *
-					     60});
-	}
-	if (silence_) {
-		silence_->setEnabled(silenceEnabled);
-		silence_->setSilenceDuration(std::chrono::seconds{silenceSec});
-		silence_->setThresholdDb(silenceDb);
-		silence_->setMinimumRecordingDuration(
-			std::chrono::seconds{static_cast<int64_t>(minRecMin) *
-					     60});
-	}
-
+	const Settings s = readSettings();
+	applySettingsToUi(s);
+	applySettingsToModel(s);
+	settingsLoaded_ = true;
 	updateRegionStatusLabel();
 	updateRegionControlsEnabled();
+	updateCombineHint();
 }
 
-void AutoStopDock::saveSettings() const
+void AutoStopDock::saveSettingsNow()
 {
 	config_t *config = obs_frontend_get_profile_config();
 	if (!config) {
@@ -738,9 +712,8 @@ void AutoStopDock::saveSettings() const
 			motionCheck_->isChecked());
 	config_set_int(config, kConfigSection, kKeyInactivitySec,
 		       inactivitySpin_->value());
-	// Do not persist SensitivityPercent — reset to default next launch.
-	config_set_double(config, kConfigSection, kKeySensitivity,
-			  kDefaultSensitivity);
+	// Sensitivity is session-only: drop any value written by old versions.
+	config_remove_value(config, kConfigSection, kKeySensitivity);
 	config_set_int(config, kConfigSection, kKeyMinRecordingMin,
 		       minRecordingSpin_->value());
 	config_set_bool(config, kConfigSection, kKeyRegionEnabled,
@@ -832,7 +805,8 @@ void AutoStopDock::onCombineModeChanged(int)
 			combineModeCombo_->currentData().toInt()));
 	}
 	updateCombineHint();
-	saveSettings();
+	updateAndWarning();
+	scheduleSave();
 }
 
 void AutoStopDock::onOpenRecordingFolder()
@@ -852,7 +826,10 @@ void AutoStopDock::onOpenRecordingFolder()
 			const bool advanced = mode && strcmp(mode, "Advanced") == 0;
 			const char *rec = nullptr;
 			if (advanced) {
-				rec = config_get_string(cfg, "AdvOut", "RecFilePath");
+				const char *type = config_get_string(cfg, "AdvOut", "RecType");
+				const bool ffmpeg = type && strcmp(type, "FFmpeg") == 0;
+				rec = config_get_string(cfg, "AdvOut",
+							ffmpeg ? "FFFilePath" : "RecFilePath");
 			} else {
 				rec = config_get_string(cfg, "SimpleOutput", "FilePath");
 			}

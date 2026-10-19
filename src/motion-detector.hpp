@@ -61,6 +61,8 @@ public:
 
 	bool isMonitoring() const { return monitoring_; }
 	double lastMotionPercent() const { return last_motion_percent_.load(); }
+	// Samples analysed since monitoring (re)started; 0 means no frames yet.
+	uint32_t sampleCount() const { return sample_count_.load(); }
 	seconds stillnessDuration() const;
 
 	bool shouldAutoStop(seconds recordingElapsed) const;
@@ -110,6 +112,7 @@ private:
 	std::atomic<uint32_t> reset_generation_{0};
 	std::atomic<int64_t> still_since_ns_{0}; // steady_clock ns; 0 = not still
 	std::atomic<double> last_motion_percent_{0.0};
+	std::atomic<uint32_t> sample_count_{0}; // analysed samples since start
 
 	// --- Graphics-thread state ---
 	gs_texture_render *texrender_ = nullptr;
@@ -121,6 +124,10 @@ private:
 	uint32_t seen_generation_ = 0;
 	std::vector<uint8_t> prev_luma_;
 	std::vector<uint8_t> cur_luma_;
+	// Frame captured when stillness started: slow changes that never exceed
+	// the frame-to-frame threshold still add up against it.
+	std::vector<uint8_t> ref_luma_;
 	bool have_prev_ = false;
+	bool have_ref_ = false;
 	uint64_t last_debug_log_ts_ = 0;
 };
