@@ -29,6 +29,7 @@
 #include <QSizePolicy>
 #include <QPushButton>
 #include <QShowEvent>
+#include <QScrollArea>
 #include <QMessageBox>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -82,7 +83,18 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 {
 	setObjectName("obsAutoStopDock");
 
-	auto *layout = new QVBoxLayout(this);
+	// A dock can be shorter than its controls when OBS is maximized. Let
+	// its contents scroll instead of painting over neighboring OBS docks.
+	auto *contents = new QWidget(this);
+	auto *layout = new QVBoxLayout(contents);
+	auto *scroll = new QScrollArea(this);
+	scroll->setFrameShape(QFrame::NoFrame);
+	scroll->setWidgetResizable(true);
+	scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	scroll->setWidget(contents);
+	auto *outer = new QVBoxLayout(this);
+	outer->setContentsMargins(0, 0, 0, 0);
+	outer->addWidget(scroll);
 	layout->setContentsMargins(8, 8, 8, 8);
 	layout->setSpacing(8);
 
