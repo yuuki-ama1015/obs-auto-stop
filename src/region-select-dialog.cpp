@@ -1,4 +1,5 @@
 #include "region-select-dialog.hpp"
+#include "plugin-text.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs.h>
@@ -89,7 +90,7 @@ void RegionPreviewCanvas::paintEvent(QPaintEvent *)
 	} else {
 		p.setPen(QColor(180, 180, 180));
 		p.drawText(rect(), Qt::AlignCenter,
-			   QStringLiteral("プレビュー待機中…\n（OBS の映像出力が必要です）"));
+			   ObsText("Region.Waiting"));
 	}
 
 	// Dim outside selection
@@ -190,7 +191,7 @@ RegionSelectDialog::RegionSelectDialog(QWidget *parent, int initX, int initY,
 				       int initW, int initH)
 	: QDialog(parent)
 {
-	setWindowTitle(QStringLiteral("監視領域を選択"));
+	setWindowTitle(ObsText("Region.Title"));
 	setModal(true);
 	resize(720, 520);
 
@@ -213,7 +214,7 @@ RegionSelectDialog::RegionSelectDialog(QWidget *parent, int initX, int initY,
 	okButton_ = buttons->button(QDialogButtonBox::Ok);
 	cancelButton_ = buttons->button(QDialogButtonBox::Cancel);
 	okButton_->setText(QStringLiteral("OK"));
-	cancelButton_->setText(QStringLiteral("キャンセル"));
+	cancelButton_->setText(ObsText("Region.Cancel"));
 
 	auto *layout = new QVBoxLayout(this);
 	layout->addWidget(canvas_, 1);
@@ -277,8 +278,7 @@ void RegionSelectDialog::refreshPreview()
 void RegionSelectDialog::updateHint()
 {
 	hintLabel_->setText(
-		QStringLiteral(
-			"ドラッグで領域を選択してください。現在: %1%, %2%  %3%×%4%")
+		ObsText("Region.Hint")
 			.arg(pending_x_)
 			.arg(pending_y_)
 			.arg(pending_w_)
