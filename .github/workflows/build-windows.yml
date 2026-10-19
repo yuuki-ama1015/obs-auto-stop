@@ -1,6 +1,9 @@
 name: Build Windows
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
     inputs:
       plugin_ref:
@@ -21,9 +24,43 @@ on:
         default: 2025-08-23
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.inputs.plugin_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  OBS_REF: ${{ github.event.inputs.obs_ref || '32.0.2' }}
+  DEPS_DATE: ${{ github.event.inputs.deps_date || '2025-08-23' }}
 
 jobs:
+  linux:
+    name: Linux (strict warnings)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.plugin_ref || '' }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends cmake g++ libobs-dev qt6-base-dev
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DOBS_AUTOSTOP_WARNINGS_AS_ERRORS=ON
+          -DCMAKE_CXX_FLAGS="-Wold-style-cast -Wuseless-cast -Wduplicated-cond -Wlogical-op -Wnull-dereference"
+
+      - name: Build (-Werror)
+        run: |
+          cmake --build build --parallel
+          ls -l build/obs-auto-stop.so
+          nm -D --defined-only build/obs-auto-stop.so | grep -q ' T obs_module_load$'
+
   windows:
     name: Windows x64
     runs-on: windows-2022
@@ -31,30 +68,43 @@ jobs:
       - name: Checkout plugin
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.plugin_ref }}
+          ref: ${{ github.event.inputs.plugin_ref || '' }}
           path: plugin
 
+      - name: Restore OBS SDK cache
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            obs-deps
+            obs-dev
+          key: obs-sdk-win64-${{ env.OBS_REF }}-${{ env.DEPS_DATE }}-v1
+
+      # Headers only are needed on a cache hit (no submodules, shallow).
       - name: Checkout obs-studio
         uses: actions/checkout@v4
         with:
           repository: obsproject/obs-studio
-          ref: ${{ github.event.inputs.obs_ref }}
-          submodules: recursive
+          ref: ${{ env.OBS_REF }}
+          submodules: ${{ steps.sdk-cache.outputs.cache-hit != 'true' && 'recursive' || 'false' }}
           path: obs-studio
 
       - name: Download obs-deps + Qt6
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $date = '${{ github.event.inputs.deps_date }}'
+          $date = $env:DEPS_DATE
           $base = "https://github.com/obsproject/obs-deps/releases/download/$date"
           New-Item -ItemType Directory -Force -Path obs-deps | Out-Null
           Invoke-WebRequest "$base/windows-deps-$date-x64.zip" -OutFile deps.zip
           Invoke-WebRequest "$base/windows-deps-qt6-$date-x64.zip" -OutFile qt6.zip
           Expand-Archive deps.zip -DestinationPath obs-deps -Force
           Expand-Archive qt6.zip -DestinationPath obs-deps -Force
+          Remove-Item deps.zip, qt6.zip
           Get-ChildItem obs-deps | Select-Object Name
 
       - name: Configure obs-studio (libobs + frontend-api)
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           cmake -S obs-studio -B obs-build -G "Visual Studio 17 2022" -A x64 `
@@ -72,50 +122,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build obs-frontend-api
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           cmake --build obs-build --target obs-frontend-api --config Release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Stage OBS dev layout for plugin CMake
+      - name: Stage OBS SDK (import libs + generated headers)
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $root = ((Resolve-Path .).Path -replace '\\', '/')
-          $dev = "$root/obs-dev"
-          New-Item -ItemType Directory -Force -Path "$dev/lib" | Out-Null
-
-          $obsLib = Get-ChildItem -Recurse obs-build -Filter 'obs.lib' | Select-Object -First 1
-          if (-not $obsLib) { throw 'obs.lib not found' }
-          Copy-Item $obsLib.FullName "$dev/lib/obs.lib" -Force
-
-          $feLib = Get-ChildItem -Recurse obs-build -Filter 'obs-frontend-api.lib' | Select-Object -First 1
-          if (-not $feLib) { throw 'obs-frontend-api.lib not found' }
-          Copy-Item $feLib.FullName "$dev/lib/obs-frontend-api.lib" -Force
-
-          $studio = "$root/obs-studio"
-          $build = "$root/obs-build"
-          $genInc = "$build/config"
-          if (-not (Test-Path "$genInc/obsconfig.h") -and -not (Test-Path "$genInc/obs-config.h")) {
-            $found = Get-ChildItem -Recurse $build -Filter 'obsconfig.h' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $genInc = ($found.DirectoryName -replace '\\', '/') }
-            else {
-              $found2 = Get-ChildItem -Recurse $build -Filter 'obs-config.h' -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($found2) { $genInc = ($found2.DirectoryName -replace '\\', '/') }
-              else { throw 'obsconfig.h / obs-config.h not found in obs-build' }
-            }
+          New-Item -ItemType Directory -Force -Path obs-dev/lib, obs-dev/include | Out-Null
+          foreach ($name in 'obs.lib', 'obs-frontend-api.lib') {
+            $lib = Get-ChildItem -Recurse obs-build -Filter $name | Select-Object -First 1
+            if (-not $lib) { throw "$name not found" }
+            Copy-Item $lib.FullName "obs-dev/lib/$name" -Force
           }
-          $libInc = "$studio/libobs"
-          $feInc = "$studio/frontend/api"
-
-          "OBS_DEV=$dev" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "OBS_STUDIO=$studio" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "OBS_BUILD=$build" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "OBS_LIB_INC=$libInc" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "OBS_GEN_INC=$genInc" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "OBS_FE_INC=$feInc" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Output "libInc=$libInc"
-          Write-Output "genInc=$genInc"
-          Write-Output "feInc=$feInc"
+          $found = $false
+          foreach ($name in 'obsconfig.h', 'obs-config.h') {
+            $h = Get-ChildItem -Recurse obs-build -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($h) { Copy-Item $h.FullName "obs-dev/include/$name" -Force; $found = $true }
+          }
+          if (-not $found) { throw 'obsconfig.h / obs-config.h not found in obs-build' }
+          Get-ChildItem -Recurse obs-dev | Select-Object FullName, Length
 
       - name: Configure plugin
         shell: pwsh
@@ -131,71 +160,20 @@ jobs:
             $qtRoot = ((Resolve-Path obs-deps).Path -replace '\\', '/')
           }
           if (-not $qtRoot) { throw 'Qt6 cmake package not found' }
+          $dev = ((Resolve-Path obs-dev).Path -replace '\\', '/')
+          $studio = ((Resolve-Path obs-studio).Path -replace '\\', '/')
 
-          $dev = ($env:OBS_DEV -replace '\\', '/')
-          $libInc = ($env:OBS_LIB_INC -replace '\\', '/')
-          $genInc = ($env:OBS_GEN_INC -replace '\\', '/')
-          $feInc = ($env:OBS_FE_INC -replace '\\', '/')
-          $studio = ($env:OBS_STUDIO -replace '\\', '/')
-          $build = ($env:OBS_BUILD -replace '\\', '/')
-
-          $cmakePath = Join-Path $pwd 'plugin/CMakeLists.txt'
-          $lines = Get-Content $cmakePath
-          $out = New-Object System.Collections.Generic.List[string]
-          $i = 0
-          while ($i -lt $lines.Count) {
-            $line = $lines[$i]
-            if ($line -match 'find_path\(OBS_LIBOBS_INCLUDE_DIR') {
-              $out.Add("set(OBS_LIBOBS_INCLUDE_DIR `"$libInc`" CACHE PATH `"libobs include`" FORCE)")
-              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++; continue
-            }
-            if ($line -match 'find_path\(OBS_GENERATED_INCLUDE_DIR') {
-              $out.Add("set(OBS_GENERATED_INCLUDE_DIR `"$genInc`" CACHE PATH `"generated include`" FORCE)")
-              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++; continue
-            }
-            if ($line -match 'find_library\(OBS_LIBOBS_LIBRARY') {
-              $out.Add("set(OBS_LIBOBS_LIBRARY `"$dev/lib/obs.lib`" CACHE FILEPATH `"libobs`" FORCE)")
-              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++; continue
-            }
-            if ($line -match 'find_library\(OBS_FRONTEND_API_LIBRARY') {
-              $out.Add("set(OBS_FRONTEND_API_LIBRARY `"$dev/lib/obs-frontend-api.lib`" CACHE FILEPATH `"frontend-api`" FORCE)")
-              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++; continue
-            }
-            if ($line -match 'target_include_directories\(obs-auto-stop PRIVATE') {
-              $out.Add('target_include_directories(obs-auto-stop PRIVATE')
-              $out.Add("        `"$libInc`"")
-              $out.Add("        `"$genInc`"")
-              $out.Add("        `"$feInc`"")
-              $out.Add(')')
-              while ($i -lt $lines.Count -and $lines[$i] -notmatch '\)\s*$') { $i++ }
-              $i++; continue
-            }
-            $out.Add($line)
-            $i++
-          }
-          $cmakeText = ($out -join "`n")
-          if ($cmakeText -notmatch 'OBS_AUTOSTOP_WIN_EXPORTS') {
-            $cmakeText += "`n`n# OBS_AUTOSTOP_WIN_EXPORTS`nif(WIN32)`n  target_link_options(obs-auto-stop PRIVATE `"/EXPORT:obs_module_load`" `"/EXPORT:obs_module_unload`")`nendif()`n"
-          }
-          [System.IO.File]::WriteAllText($cmakePath, $cmakeText)
-
-          $mainPath = Join-Path $pwd 'plugin/src/plugin-main.cpp'
-          $main = [System.IO.File]::ReadAllText($mainPath)
-          if ($main -notmatch 'OBS_AUTOSTOP_DLL_EXPORT') {
-            $decl = "#ifdef _WIN32`r`n#define OBS_AUTOSTOP_DLL_EXPORT __declspec(dllexport)`r`n#else`r`n#define OBS_AUTOSTOP_DLL_EXPORT`r`n#endif`r`n"
-            $main = $main.Replace('bool obs_module_load(void)', ($decl + 'OBS_AUTOSTOP_DLL_EXPORT bool obs_module_load(void)'))
-            $main = $main.Replace('void obs_module_unload(void)', 'OBS_AUTOSTOP_DLL_EXPORT void obs_module_unload(void)')
-            [System.IO.File]::WriteAllText($mainPath, $main)
-          }
-
+          # All OBS paths are CMake cache variables; no CMakeLists patching.
+          # obs_module_load/unload are exported via MODULE_EXPORT in obs-module.h.
           cmake -S plugin -B plugin-build -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_PREFIX_PATH="$qtRoot" `
+            -DOBS_AUTOSTOP_USE_PACKAGES=OFF `
             -DOBS_SOURCE_DIR="$studio" `
-            -DOBS_BUILD_DIR="$build"
+            -DOBS_LIBOBS_INCLUDE_DIR="$studio/libobs" `
+            -DOBS_GENERATED_INCLUDE_DIR="$dev/include" `
+            -DOBS_FRONTEND_API_INCLUDE_DIR="$studio/frontend/api" `
+            -DOBS_LIBOBS_LIBRARY="$dev/lib/obs.lib" `
+            -DOBS_FRONTEND_API_LIBRARY="$dev/lib/obs-frontend-api.lib"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build plugin
@@ -206,33 +184,45 @@ jobs:
           $dll = Get-ChildItem -Recurse plugin-build -Filter 'obs-auto-stop.dll' | Select-Object -First 1
           if (-not $dll) { throw 'obs-auto-stop.dll not found' }
           Get-Item $dll.FullName | Format-List FullName, Length
+          "DLL_PATH=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Verify DLL exports
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin not found' }
+          $exports = & $dumpbin /nologo /exports $env:DLL_PATH | Out-String
+          Write-Output $exports
+          foreach ($sym in 'obs_module_load', 'obs_module_unload', 'obs_module_set_pointer', 'obs_module_ver') {
+            if ($exports -notmatch "\b$sym\b") { throw "missing export: $sym" }
+          }
 
       - name: Package zip
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Recurse plugin-build -Filter 'obs-auto-stop.dll' | Select-Object -First 1
-          if (-not $dll) { throw 'obs-auto-stop.dll not found' }
+          $cm = Get-Content plugin/CMakeLists.txt -Raw
+          if ($cm -notmatch 'project\(obs-auto-stop VERSION ([0-9.]+)') { throw 'version not found' }
+          $version = $Matches[1]
           $stage = Join-Path $pwd 'stage/obs-auto-stop'
-          New-Item -ItemType Directory -Force -Path "$stage/bin/64bit" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$stage/data/locale" | Out-Null
-          Copy-Item $dll.FullName "$stage/bin/64bit/obs-auto-stop.dll" -Force
-          $localeSrc = Join-Path $pwd 'plugin/data/locale'
-          if (Test-Path $localeSrc) {
-            Copy-Item "$localeSrc/*" "$stage/data/locale/" -Force
-          }
+          New-Item -ItemType Directory -Force -Path "$stage/bin/64bit", "$stage/data/locale" | Out-Null
+          Copy-Item $env:DLL_PATH "$stage/bin/64bit/obs-auto-stop.dll" -Force
+          Copy-Item plugin/data/locale/* "$stage/data/locale/" -Force
+          $sha = (git -C plugin rev-parse --short HEAD).Trim()
           @(
-            'OBS Auto Stop — pre-region Windows build',
-            "Plugin ref: ${{ github.event.inputs.plugin_ref }}",
-            "OBS ref: ${{ github.event.inputs.obs_ref }}",
-            'Built for Windows x64 / OBS 32.x',
+            "OBS Auto Stop v$version - Windows x64 build",
+            "Plugin commit: $sha",
+            "Built against OBS: $env:OBS_REF (for OBS 32.x)",
             '',
             'Install:',
-            'Extract so that obs-auto-stop/ is under %APPDATA%\obs-studio\plugins\',
-            'Then restart OBS.'
+            '1. Close OBS.',
+            '2. Extract so that the obs-auto-stop folder is at',
+            '   %ProgramData%\obs-studio\plugins\obs-auto-stop\',
+            '   (i.e. C:\ProgramData\obs-studio\plugins\obs-auto-stop\bin\64bit\obs-auto-stop.dll)',
+            '3. Start OBS and open Docks > OBS Auto Stop.'
           ) | Set-Content -Encoding utf8 "$stage/README-DIST.txt"
-          $zipName = 'obs-auto-stop-v0.1.0-pre-region-windows.zip'
-          if (Test-Path $zipName) { Remove-Item $zipName -Force }
-          Compress-Archive -Path (Join-Path $pwd 'stage/obs-auto-stop') -DestinationPath $zipName -Force
+          $zipName = "obs-auto-stop-v$version-windows-x64.zip"
+          Compress-Archive -Path $stage -DestinationPath $zipName -Force
           Get-Item $zipName | Format-List FullName, Length
           "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -242,10 +232,18 @@ jobs:
           name: obs-auto-stop-windows
           path: ${{ env.ZIP_NAME }}
 
-      - name: Attach to GitHub Release
-        if: ${{ github.event.inputs.attach_release != '' }}
-        shell: pwsh
+  release:
+    name: Attach to GitHub Release
+    needs: [linux, windows]
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.attach_release != '' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: obs-auto-stop-windows
+      - name: Upload zip to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload '${{ github.event.inputs.attach_release }}' '${{ env.ZIP_NAME }}' --repo ${{ github.repository }} --clobber
+        run: gh release upload '${{ github.event.inputs.attach_release }}' obs-auto-stop-v*-windows-x64.zip --repo '${{ github.repository }}' --clobber

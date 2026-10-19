@@ -114,18 +114,30 @@ C:\ProgramData\obs-studio\plugins\obs-auto-stop\
 
 ## ビルド
 
-OBS SDK は同梱しません。CMake の設定値または環境変数でパスを渡します。
+OBS SDK は同梱しません。
+
+**Linux**（`libobs-dev` と `qt6-base-dev` があれば CMake パッケージを自動で使います。ビルド種別の既定は Release）:
+
+```bash
+cmake -S . -B build
+cmake --build build
+```
+
+**Windows**（OBS のソースとビルドツリーを渡します。個々のパスは `-DOBS_LIBOBS_INCLUDE_DIR` / `-DOBS_GENERATED_INCLUDE_DIR` / `-DOBS_FRONTEND_API_INCLUDE_DIR` / `-DOBS_LIBOBS_LIBRARY` / `-DOBS_FRONTEND_API_LIBRARY` でも直接指定できます）:
 
 ```powershell
 cmake -S . -B build `
   -DOBS_SOURCE_DIR=C:/path/to/obs-studio `
   -DOBS_BUILD_DIR=C:/path/to/obs-studio/build
-cmake --build build --config RelWithDebInfo
+cmake --build build --config Release
 ```
 
+`-DOBS_AUTOSTOP_WARNINGS_AS_ERRORS=ON` で警告をエラー扱いにします（CI の Linux ジョブで使用）。
 OBS SDK が見つからない場合、CMake は警告を出してプラグイン target をスキップします。
 
 Qt Widgets が必要です（Dock UI 用）。
+
+CI（`.github/workflows/build-windows.yml`）は main への push・PR・手動実行で、Linux（`-Werror`）と Windows x64 をビルドします。Windows 版は artifact `obs-auto-stop-windows`（`obs-auto-stop-v<version>-windows-x64.zip`）として保存されます。
 
 ## 開発・検証メモ
 

@@ -68,6 +68,10 @@ gh workflow run build-windows.yml --repo yuuki-ama1015/obs-auto-stop --ref main 
 
 成果物 zip を展開して ProgramData に上書き → OBS を完全終了してから再起動。
 
+- CI は main への push と PR でも自動で走る（Linux `-Werror` ジョブ + Windows）。OBS SDK（obs-deps と obs.lib / obs-frontend-api.lib / obsconfig.h）は `actions/cache` でキャッシュされ、2 回目以降は OBS のビルドを省略する。
+- CMakeLists をワークフロー内で書き換える処理は廃止。OBS のパスは `-DOBS_*` キャッシュ変数で渡す。エクスポートは obs-module.h の `MODULE_EXPORT` で付き、CI で dumpbin により確認する。
+- zip 名は `obs-auto-stop-v<CMake の version>-windows-x64.zip`。
+
 ---
 
 ## 3. 実機検証の到達点
