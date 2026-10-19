@@ -35,6 +35,10 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -749,12 +753,28 @@ void AutoStopDock::ensureFloatingMinimizeButton()
 		return;
 	}
 	const Qt::WindowFlags flags = dock->windowFlags();
-	if (flags & Qt::WindowMinimizeButtonHint) {
-		return;
+	// Qt::Tool already contains the Qt::Window bit. Replace the type rather
+	// than OR-ing it, otherwise Windows minimizes the dock to a desktop bar.
+	const Qt::WindowFlags floatingFlags =
+		(flags & ~Qt::WindowType_Mask) | Qt::Window |
+		Qt::WindowMinimizeButtonHint | Qt::WindowCloseButtonHint;
+	const bool changed = flags != floatingFlags;
+	if (changed) {
+		dock->setWindowFlags(floatingFlags);
 	}
-	dock->setWindowFlags(flags | Qt::Window | Qt::WindowMinimizeButtonHint |
-			     Qt::WindowCloseButtonHint);
-	dock->show();
+#ifdef Q_OS_WIN
+	// Keep the OBS parent for docking/lifetime, but give the owned floating
+	// window its own taskbar entry. A normal owned window alone has none.
+	const HWND hwnd = reinterpret_cast<HWND>(dock->winId());
+	const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+	const LONG_PTR taskbarStyle = (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW;
+	if (style != taskbarStyle) {
+		SetWindowLongPtrW(hwnd, GWL_EXSTYLE, taskbarStyle);
+	}
+#endif
+	if (changed) {
+		dock->show();
+	}
 }
 
 void AutoStopDock::showEvent(QShowEvent *event)

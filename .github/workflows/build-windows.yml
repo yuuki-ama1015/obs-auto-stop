@@ -61,6 +61,24 @@ jobs:
           ls -l build/obs-auto-stop.so
           nm -D --defined-only build/obs-auto-stop.so | grep -q ' T obs_module_load$'
 
+      - name: Package Linux zip
+        run: |
+          version=$(sed -n 's/project(obs-auto-stop VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          test -n "$version"
+          stage=stage/obs-auto-stop
+          mkdir -p "$stage/bin/64bit" "$stage/data/locale"
+          cp build/obs-auto-stop.so "$stage/bin/64bit/"
+          cp data/locale/*.ini "$stage/data/locale/"
+          cp LICENSE "$stage/"
+          printf 'OBS Auto Stop v%s - Linux x64\nPlugin commit: %s\nInstall obs-auto-stop in ~/.config/obs-studio/plugins/ while OBS is closed.\n' "$version" "$(git rev-parse HEAD)" > "$stage/README-DIST.txt"
+          (cd stage && zip -qr "../obs-auto-stop-v$version-linux-x64.zip" obs-auto-stop)
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-auto-stop-linux
+          path: obs-auto-stop-v*-linux-x64.zip
+
   windows:
     name: Windows x64
     runs-on: windows-2022
@@ -208,6 +226,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$stage/bin/64bit", "$stage/data/locale" | Out-Null
           Copy-Item $env:DLL_PATH "$stage/bin/64bit/obs-auto-stop.dll" -Force
           Copy-Item plugin/data/locale/* "$stage/data/locale/" -Force
+          Copy-Item plugin/LICENSE "$stage/LICENSE" -Force
           $sha = (git -C plugin rev-parse --short HEAD).Trim()
           @(
             "OBS Auto Stop v$version - Windows x64 build",
@@ -242,8 +261,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: obs-auto-stop-windows
+          pattern: obs-auto-stop-*
+          merge-multiple: true
       - name: Upload zip to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload '${{ github.event.inputs.attach_release }}' obs-auto-stop-v*-windows-x64.zip --repo '${{ github.repository }}' --clobber
+        run: gh release upload '${{ github.event.inputs.attach_release }}' obs-auto-stop-v*-x64.zip --repo '${{ github.repository }}' --clobber
