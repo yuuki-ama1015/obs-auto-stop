@@ -1,8 +1,8 @@
 # 引き継ぎメモ（obs-auto-stop）
 
-最終更新: 2026-09-23（Asia/Tokyo）  
+最終更新: 2026-10-19（Asia/Tokyo）  
 リポジトリ: https://github.com/yuuki-ama1015/obs-auto-stop （**公開** / `main`）  
-直近 tip（このメモ作成時点）: `a28ff44` — `fix(dock): tighten spacing under combine-mode row`
+直近: 2026-10-19 にコードレビュー（REVIEW）指摘を PR #11〜#15 で一括対応（下の「7. マージ済み PR」参照）
 
 このファイルは、別エージェント／別担当が続きをやるときの入口です。まずここを読んでから README とログを見てください。
 
@@ -96,16 +96,16 @@ gh workflow run build-windows.yml --repo yuuki-ama1015/obs-auto-stop --ref main 
 
 | パス | 役割 |
 | --- | --- |
-| `src/plugin-main.cpp` | load/unload、tick、フロントエンドイベント。AND/OR 判定はここ |
-| `src/auto-stop-dock.cpp` / `.hpp` | ドック UI（日本語ハードコード多め） |
-| `src/motion-detector.*` | 静止検出 |
-| `src/media-end-watcher.*` | メディア終了（MSVC では `struct calldata` 必須 — PR #6） |
-| `src/silence-detector.*` | 無音検出 |
-| `src/recording-monitor.*` | 録画経過・最大時間 |
+| `src/plugin-main.cpp` | load/unload、UI スレッドの 250ms QTimer で条件評価、フロントエンドイベント（一時停止・プロファイル・シーン切替・終了処理）。AND/OR 判定はここ |
+| `src/auto-stop-dock.cpp` / `.hpp` | ドック UI。文言は `ObsText("Dock.*")`（`src/plugin-text.hpp`）経由でロケールから |
+| `src/motion-detector.*` | 静止検出（main rendered callback で GPU 縮小 256x144 → 1 フレーム遅れのステージング読み戻し。フル解像度の raw video callback は使わない） |
+| `src/media-end-watcher.*` | メディア終了（入れ子シーン・グループ対応、番組シーン切替で張り直し、`loop`/`looping`。MSVC では `struct calldata` 必須 — PR #6） |
+| `src/silence-detector.*` | 無音検出（トラック 1、ロックフリー） |
+| `src/recording-monitor.*` | 録画経過・最大時間（一時停止中は数えない） |
 | `src/stop-controller.*` | 停止要求 + `StopCombineMode` |
 | `src/region-select-dialog.*` | 領域ドラッグ選択 |
-| `data/locale/ja-JP.ini`, `en-US.ini` | ロケール（ドック文言の一部は C++ 直書き） |
-| `.github/workflows/build-windows.yml` | Windows CI（OBS 32.0.2 + deps でビルド） |
+| `data/locale/ja-JP.ini`, `en-US.ini` | ロケール（ドック・領域ダイアログの全文言。DLL と一緒に配置必須） |
+| `.github/workflows/build-windows.yml` | CI（push/PR/手動。Linux -Werror + Windows x64、OBS 32.0.2 + deps、SDK キャッシュ） |
 
 ---
 
@@ -143,6 +143,14 @@ gh workflow run build-windows.yml --repo yuuki-ama1015/obs-auto-stop --ref main 
 
 その後 main 直コミット: ツールチップ文字列修正、combine 行下の余白詰め（`a28ff44`）
 
+レビュー対応（2026-10-19）:
+
+11. #11 一時停止の扱い（経過時間が一時停止で 0 に戻るバグ修正、一時停止中は停止しない）、録画中に ON にした条件を即監視、評価を UI スレッドの QTimer へ、最小化はフロート時のみ
+12. #12 静止検出を GPU 縮小 + 小さい読み戻しに（フル解像度読み戻しを廃止）
+13. #13 メディア終了（グループ・シーン追従・VLC loop）、プロファイル切替で再読込、終了処理、AND 警告、保存デバウンス、ログ整理
+14. #14 CMake/CI（パッケージ優先、Release 既定、サイズ削減フラグ、/utf-8、push/PR 実行、Linux -Werror、キャッシュ、ProgramData 表記）
+15. #15 ドック文言のロケール化（ja-JP は従来と同一表示）
+
 ---
 
 ## 8. 次にやるとよいこと（候補）
@@ -150,9 +158,8 @@ gh workflow run build-windows.yml --repo yuuki-ama1015/obs-auto-stop --ref main 
 優先度はユーザー判断。候補のみ。
 
 1. **最新 main の Release を切る**（配布 zip を現行機能に合わせる）
-2. **メディア終了 / 無音 / AND の実機再確認**（チェックリストをログ付きで）
+2. **メディア終了 / 無音 / AND の実機再確認**（チェックリストをログ付きで）。特に D3D11 での静止検出（GPU 経路）と、フロートドックのタスクバー最小化
 3. README の「将来検討」: 黒画面、終了前待機、インストーラなど
-4. ドック文言の locale 化（いま C++ ハードコードが多い）
 5. OBS 32.2.2 向け SDK でビルドする CI 更新（現状 32.0.2 ベース）
 
 ---
