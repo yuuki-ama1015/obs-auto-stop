@@ -1,4 +1,5 @@
 #include "auto-stop-dock.hpp"
+#include "plugin-text.hpp"
 
 #include "motion-detector.hpp"
 #include "media-end-watcher.hpp"
@@ -82,17 +83,17 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->setSpacing(8);
 
 	combineModeCombo_ = new QComboBox(this);
-	combineModeCombo_->addItem(QStringLiteral("または（どれか1つ）"),
+	combineModeCombo_->addItem(ObsText("Dock.Combine.Or"),
 				   static_cast<int>(StopCombineMode::Or));
-	combineModeCombo_->addItem(QStringLiteral("かつ（すべて）"),
+	combineModeCombo_->addItem(ObsText("Dock.Combine.And"),
 				   static_cast<int>(StopCombineMode::And));
 	combineModeCombo_->setToolTip(
-		QStringLiteral("静止・無音・メディア終了の組み合わせ方です。\n「または」: ONの条件のどれか1つで終了\n「かつ」: ONの条件がすべて満たされたら終了\n※タイマー（最大録画時間）は常に単独で終了します"));
+		ObsText("Dock.Combine.Tooltip"));
 
 	openFolderButton_ = new QToolButton(this);
 	openFolderButton_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
 	openFolderButton_->setAutoRaise(true);
-	openFolderButton_->setToolTip(QStringLiteral("録画の保存先フォルダを開く"));
+	openFolderButton_->setToolTip(ObsText("Dock.OpenFolder.Tooltip"));
 
 	combineHintLabel_ = new QLabel(this);
 	combineHintLabel_->setWordWrap(true);
@@ -100,44 +101,42 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	combineHintLabel_->setStyleSheet(
 		QStringLiteral("color: palette(mid); margin: 0; padding: 0;"));
 
-	autoStopCheck_ = new QCheckBox(QStringLiteral("タイマーによって自動で録画終了"), this);
+	autoStopCheck_ = new QCheckBox(ObsText("Dock.Timer.Check"), this);
 	maxMinutesSpin_ = new QSpinBox(this);
 	maxMinutesSpin_->setRange(0, 999);
-	maxMinutesSpin_->setSuffix(QStringLiteral(" 分"));
+	maxMinutesSpin_->setSuffix(ObsText("Dock.Suffix.Minutes"));
 	maxMinutesSpin_->setToolTip(
-		QStringLiteral("0 にすると録画タイマーによる自動停止は無効です"));
+		ObsText("Dock.Timer.Tooltip"));
 
 	auto *timerForm = new QFormLayout;
 	timerForm->setContentsMargins(0, 0, 0, 0);
-	timerForm->addRow(QStringLiteral("録画タイマー"), maxMinutesSpin_);
+	timerForm->addRow(ObsText("Dock.Timer.Label"), maxMinutesSpin_);
 
-	motionCheck_ = new QCheckBox(QStringLiteral("画面が一定時間静止したら自動で録画終了"), this);
+	motionCheck_ = new QCheckBox(ObsText("Dock.Motion.Check"), this);
 	inactivitySpin_ = new QSpinBox(this);
 	inactivitySpin_->setRange(1, 600);
-	inactivitySpin_->setSuffix(QStringLiteral(" 秒"));
+	inactivitySpin_->setSuffix(ObsText("Dock.Suffix.Seconds"));
 	sensitivitySpin_ = new QDoubleSpinBox(this);
 	sensitivitySpin_->setRange(0.1, 50.0);
 	sensitivitySpin_->setSingleStep(0.1);
 	sensitivitySpin_->setSuffix(QStringLiteral(" %"));
-	sensitivitySpin_->setToolTip(QStringLiteral(
-		"この起動中だけ有効です。OBSを終了すると既定値（0.5%）に戻ります"));
+	sensitivitySpin_->setToolTip(ObsText("Dock.Motion.Sensitivity.Tooltip"));
 	minRecordingSpin_ = new QSpinBox(this);
 	minRecordingSpin_->setRange(0, 120);
-	minRecordingSpin_->setSuffix(QStringLiteral(" 分"));
+	minRecordingSpin_->setSuffix(ObsText("Dock.Suffix.Minutes"));
 
 	auto *motionForm = new QFormLayout;
 	motionForm->setContentsMargins(0, 0, 0, 0);
 	motionForm->addRow(motionCheck_);
-	motionForm->addRow(QStringLiteral("静止と判断する時間"), inactivitySpin_);
-	motionForm->addRow(QStringLiteral("静止判定の感度"), sensitivitySpin_);
-	motionForm->addRow(QStringLiteral("最低録画時間"), minRecordingSpin_);
+	motionForm->addRow(ObsText("Dock.Motion.Duration"), inactivitySpin_);
+	motionForm->addRow(ObsText("Dock.Motion.Sensitivity"), sensitivitySpin_);
+	motionForm->addRow(ObsText("Dock.Motion.MinRecording"), minRecordingSpin_);
 
 	regionCheck_ = new QCheckBox(
-		QStringLiteral("└ 監視領域を限定する（静止検出のオプション）"), this);
-	regionCheck_->setToolTip(QStringLiteral(
-		"「画面が一定時間静止したら自動で録画終了」がONのときだけ有効です"));
+		ObsText("Dock.Region.Check"), this);
+	regionCheck_->setToolTip(ObsText("Dock.Region.Tooltip"));
 	selectRegionButton_ =
-		new QPushButton(QStringLiteral("領域を選択"), this);
+		new QPushButton(ObsText("Dock.Region.Select"), this);
 	regionStatusLabel_ = new QLabel(this);
 	regionStatusLabel_->setWordWrap(true);
 
@@ -164,33 +163,32 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	regionWidget_->setLayout(regionIndent);
 
 	mediaEndCheck_ = new QCheckBox(
-		QStringLiteral("メディアソースの再生が終わったら自動で録画終了"), this);
-	mediaEndCheck_->setToolTip(QStringLiteral(
-		"ループOFFのメディアソースが終了したら録画を停止します"));
+		ObsText("Dock.Media.Check"), this);
+	mediaEndCheck_->setToolTip(ObsText("Dock.Media.Tooltip"));
 
 	silenceCheck_ = new QCheckBox(
-		QStringLiteral("一定時間無音なら自動で録画終了"), this);
+		ObsText("Dock.Silence.Check"), this);
 	silenceSpin_ = new QSpinBox(this);
 	silenceSpin_->setRange(1, 600);
-	silenceSpin_->setSuffix(QStringLiteral(" 秒"));
+	silenceSpin_->setSuffix(ObsText("Dock.Suffix.Seconds"));
 	silenceThresholdSpin_ = new QDoubleSpinBox(this);
 	silenceThresholdSpin_->setRange(-100.0, 0.0);
 	silenceThresholdSpin_->setSingleStep(1.0);
 	silenceThresholdSpin_->setSuffix(QStringLiteral(" dB"));
 	silenceThresholdSpin_->setToolTip(
-		QStringLiteral("これ以下のピークレベルを無音とみなします（dBFS）"));
+		ObsText("Dock.Silence.Threshold.Tooltip"));
 
 	auto *silenceForm = new QFormLayout;
 	silenceForm->setContentsMargins(0, 0, 0, 0);
 	silenceForm->addRow(silenceCheck_);
-	silenceForm->addRow(QStringLiteral("無音と判断する時間"), silenceSpin_);
-	silenceForm->addRow(QStringLiteral("無音しきい値"), silenceThresholdSpin_);
+	silenceForm->addRow(ObsText("Dock.Silence.Duration"), silenceSpin_);
+	silenceForm->addRow(ObsText("Dock.Silence.Threshold"), silenceThresholdSpin_);
 
-	statusLabel_ = new QLabel(QStringLiteral("プラグインステータス: 待機中"), this);
-	elapsedLabel_ = new QLabel(QStringLiteral("経過時間: 0 / — 秒"), this);
-	motionLabel_ = new QLabel(QStringLiteral("静止時間: 0 / — 秒"), this);
-	mediaLabel_ = new QLabel(QStringLiteral("メディア終了: —"), this);
-	silenceLabel_ = new QLabel(QStringLiteral("無音時間: —"), this);
+	statusLabel_ = new QLabel(ObsText("Dock.Status.Idle"), this);
+	elapsedLabel_ = new QLabel(ObsText("Dock.Elapsed.Initial"), this);
+	motionLabel_ = new QLabel(ObsText("Dock.Still.Initial"), this);
+	mediaLabel_ = new QLabel(ObsText("Dock.Media.Off"), this);
+	silenceLabel_ = new QLabel(ObsText("Dock.Silence.Off"), this);
 	warningLabel_ = new QLabel(this);
 	warningLabel_->setWordWrap(true);
 	warningLabel_->setStyleSheet(QStringLiteral("color: #e0a030;"));
@@ -204,7 +202,7 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	auto *combineRow = new QHBoxLayout;
 	combineRow->setContentsMargins(0, 0, 0, 0);
 	combineRow->setSpacing(6);
-	combineRow->addWidget(new QLabel(QStringLiteral("条件の組み合わせ"), this));
+	combineRow->addWidget(new QLabel(ObsText("Dock.Combine.Label"), this));
 	combineRow->addWidget(combineModeCombo_, 1);
 	combineRow->addWidget(openFolderButton_);
 
@@ -232,9 +230,8 @@ AutoStopDock::AutoStopDock(RecordingMonitor *monitor, MotionDetector *motion,
 	layout->addWidget(warningLabel_);
 	layout->addWidget(envLabel_);
 
-	minimizeButton_ = new QPushButton(QStringLiteral("タスクバーに最小化"), this);
-	minimizeButton_->setToolTip(QStringLiteral(
-		"ドックをフロート表示しているとき、タスクバーへ最小化します"));
+	minimizeButton_ = new QPushButton(ObsText("Dock.Minimize"), this);
+	minimizeButton_->setToolTip(ObsText("Dock.Minimize.Tooltip"));
 	layout->addWidget(minimizeButton_);
 	layout->addStretch(1);
 
@@ -306,8 +303,7 @@ void AutoStopDock::flushPendingSave()
 
 void AutoStopDock::setEnvOverrideActive(bool active)
 {
-	envLabel_->setText(QStringLiteral(
-		"環境変数 OBS_AUTOSTOP_* で一部の設定を上書き中です（表示は保存値）"));
+	envLabel_->setText(ObsText("Dock.EnvOverride"));
 	envLabel_->setVisible(active);
 }
 
@@ -457,7 +453,7 @@ void AutoStopDock::updateRegionControlsEnabled()
 void AutoStopDock::updateRegionStatusLabel()
 {
 	regionStatusLabel_->setText(
-		QStringLiteral("領域: %1%, %2%  %3%×%4%")
+		ObsText("Dock.Region.Status")
 			.arg(regionX_)
 			.arg(regionY_)
 			.arg(regionW_)
@@ -479,27 +475,27 @@ void AutoStopDock::refreshStatus()
 			   (silence_ && silence_->isEnabled());
 	if (!anyOn) {
 		statusLabel_->setText(
-			QStringLiteral("プラグインステータス: 自動停止 OFF"));
+			ObsText("Dock.Status.Off"));
 	} else if (monitor_->isPaused()) {
 		statusLabel_->setText(
-			QStringLiteral("プラグインステータス: 一時停止中"));
+			ObsText("Dock.Status.Paused"));
 	} else if (stop_ && stop_->stopRequested()) {
 		statusLabel_->setText(
-			QStringLiteral("プラグインステータス: 自動停止要求中"));
+			ObsText("Dock.Status.Stopping"));
 	} else if (monitor_->isRecording()) {
-		statusLabel_->setText(QStringLiteral("プラグインステータス: 録画中"));
+		statusLabel_->setText(ObsText("Dock.Status.Recording"));
 	} else {
-		statusLabel_->setText(QStringLiteral("プラグインステータス: 待機中"));
+		statusLabel_->setText(ObsText("Dock.Status.Idle"));
 	}
 
 	if (monitor_->isEnabled() && maxSec > 0) {
 		elapsedLabel_->setText(
-			QStringLiteral("経過時間: %1 / %2 秒")
+			ObsText("Dock.Elapsed")
 				.arg(static_cast<qlonglong>(elapsed))
 				.arg(static_cast<qlonglong>(maxSec)));
 	} else {
 		elapsedLabel_->setText(
-			QStringLiteral("経過時間: %1 / — 秒")
+			ObsText("Dock.Elapsed.NoLimit")
 				.arg(static_cast<qlonglong>(elapsed)));
 	}
 
@@ -510,49 +506,49 @@ void AutoStopDock::refreshStatus()
 		if (motion_->isRegionEnabled()) {
 			int x, y, w, h;
 			motion_->regionPercent(x, y, w, h);
-			regionNote = QStringLiteral(" / 領域 %1%,%2% %3%x%4%")
+			regionNote = ObsText("Dock.Still.RegionNote")
 					     .arg(x)
 					     .arg(y)
 					     .arg(w)
 					     .arg(h);
 		}
 		motionLabel_->setText(
-			QStringLiteral("静止時間: %1 / %2 秒 (動き %3%)%4")
+			ObsText("Dock.Still")
 				.arg(static_cast<qlonglong>(still))
 				.arg(static_cast<qlonglong>(need))
 				.arg(motion_->lastMotionPercent(), 0, 'f', 2)
 				.arg(regionNote));
 	} else {
-		motionLabel_->setText(QStringLiteral("静止時間: —"));
+		motionLabel_->setText(ObsText("Dock.Still.Off"));
 	}
 
 	if (media_ && media_->isEnabled()) {
 		const auto name = media_->endedSourceName();
 		if (!name.empty()) {
 			mediaLabel_->setText(
-				QStringLiteral("メディア終了: 検知 (%1)")
+				ObsText("Dock.Media.Detected")
 					.arg(QString::fromStdString(name)));
 		} else if (media_->isMonitoring()) {
 			mediaLabel_->setText(
-				QStringLiteral("メディア終了: 監視中 (%1 件)")
+				ObsText("Dock.Media.Watching")
 					.arg(static_cast<qulonglong>(media_->watchedCount())));
 		} else {
-			mediaLabel_->setText(QStringLiteral("メディア終了: 録画開始で監視"));
+			mediaLabel_->setText(ObsText("Dock.Media.WaitRecording"));
 		}
 	} else {
-		mediaLabel_->setText(QStringLiteral("メディア終了: —"));
+		mediaLabel_->setText(ObsText("Dock.Media.Off"));
 	}
 
 	if (silence_ && silence_->isEnabled()) {
 		const auto still = silence_->silenceActiveDuration().count();
 		const auto need = silence_->silenceDuration().count();
 		silenceLabel_->setText(
-			QStringLiteral("無音時間: %1 / %2 秒 (レベル %3 dB)")
+			ObsText("Dock.Silence")
 				.arg(static_cast<qlonglong>(still))
 				.arg(static_cast<qlonglong>(need))
 				.arg(silence_->lastLevelDb(), 0, 'f', 1));
 	} else {
-		silenceLabel_->setText(QStringLiteral("無音時間: —"));
+		silenceLabel_->setText(ObsText("Dock.Silence.Off"));
 	}
 
 	updateAndWarning();
@@ -567,8 +563,7 @@ void AutoStopDock::updateAndWarning()
 				   media_->isMonitoring() &&
 				   media_->watchedCount() == 0;
 	if (unsatisfiable) {
-		warningLabel_->setText(QStringLiteral(
-			"⚠ 「かつ」: 監視できるメディアソース（ループOFF）が番組シーンにないため、静止・無音・メディア終了の条件は成立しません（タイマーは有効）"));
+		warningLabel_->setText(ObsText("Dock.Warning.AndMedia"));
 	}
 	warningLabel_->setVisible(unsatisfiable);
 }
@@ -774,9 +769,7 @@ void AutoStopDock::onMinimizeToTaskbar()
 	if (!dock || !dock->isFloating()) {
 		QMessageBox::information(
 			this, QStringLiteral("OBS Auto Stop"),
-			QStringLiteral(
-				"フロート表示のときだけタスクバーに最小化できます。\n"
-				"ドックをウィンドウから切り離してから、もう一度押してください。"));
+			ObsText("Dock.Minimize.NotFloating"));
 		return;
 	}
 	ensureFloatingMinimizeButton();
@@ -790,11 +783,9 @@ void AutoStopDock::updateCombineHint()
 	}
 	const int mode = combineModeCombo_->currentData().toInt();
 	if (mode == static_cast<int>(StopCombineMode::And)) {
-		combineHintLabel_->setText(QStringLiteral(
-			"「かつ」: ONの条件をすべて満たしたら終了（タイマーは単独）"));
+		combineHintLabel_->setText(ObsText("Dock.Combine.HintAnd"));
 	} else {
-		combineHintLabel_->setText(QStringLiteral(
-			"「または」: ONの条件のどれか1つで終了（タイマーは単独）"));
+		combineHintLabel_->setText(ObsText("Dock.Combine.HintOr"));
 	}
 }
 
@@ -842,7 +833,7 @@ void AutoStopDock::onOpenRecordingFolder()
 	if (folder.isEmpty()) {
 		QMessageBox::information(
 			this, QStringLiteral("OBS Auto Stop"),
-			QStringLiteral("録画の保存先を取得できませんでした。"));
+			ObsText("Dock.Folder.Unknown"));
 		return;
 	}
 
@@ -853,7 +844,7 @@ void AutoStopDock::onOpenRecordingFolder()
 	if (!QDir(folder).exists()) {
 		QMessageBox::warning(
 			this, QStringLiteral("OBS Auto Stop"),
-			QStringLiteral("保存先フォルダが存在しません:\n%1").arg(folder));
+			ObsText("Dock.Folder.Missing").arg(folder));
 		return;
 	}
 

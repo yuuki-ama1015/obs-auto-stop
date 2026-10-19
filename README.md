@@ -158,7 +158,7 @@ CI（`.github/workflows/build-windows.yml`）は main への push・PR・手動�
   - `OBS_AUTOSTOP_MOTION`
   - `OBS_AUTOSTOP_INACTIVITY_SECONDS`
   - `OBS_AUTOSTOP_MIN_RECORDING_SECONDS`
-- ロケール: `data/locale/en-US.ini`, `data/locale/ja-JP.ini`（OBS の言語設定に応じて読み込まれます）。Dock UI の一部ラベルは C++ 側で日本語ハードコードです。
+- ロケール: `data/locale/en-US.ini`, `data/locale/ja-JP.ini`（OBS の言語設定に応じて読み込まれます）。ドックと領域選択ダイアログの文言はすべてロケールファイルにあり、日本語以外の OBS では英語表示になります。zip / インストール時は `data/locale/*.ini` も必ず一緒に置いてください（ないとキー名が表示されます）。
 
 Linux 環境では、録画タイマー自動停止と画面静止による自動停止の両方を実録画で確認済みです。出力ファイルの生成可否は表示環境に依存します。
 
