@@ -1,26 +1,59 @@
 #include "motion-detector.hpp"
 
 #include <obs-module.h>
-#include <media-io/video-io.h>
+#include <obs.h>
+#include <graphics/graphics.h>
 
 #include <algorithm>
-#include <cmath>
 
 namespace {
-constexpr uint32_t kAnalyzeWidth = 160;
-constexpr uint32_t kAnalyzeHeight = 90;
-// Sample ~2 fps to keep CPU cost low.
-constexpr uint32_t kFrameRateDivisor = 8;
+// Sample interval (~8 per second), independent of the canvas frame rate.
+constexpr uint64_t kSampleIntervalNs = 125'000'000ull;
+constexpr int kPixelDelta = 12;
 
 int clampPercent(int value)
 {
-	if (value < 0) {
-		return 0;
+	return std::max(0, std::min(100, value));
+}
+
+int64_t steadyNowNs()
+{
+	return std::chrono::duration_cast<std::chrono::nanoseconds>(
+		       std::chrono::steady_clock::now().time_since_epoch())
+		.count();
+}
+
+uint32_t packRegion(bool enabled, int x, int y, int w, int h)
+{
+	return (enabled ? 1u : 0u) | (static_cast<uint32_t>(x) << 1) |
+	       (static_cast<uint32_t>(y) << 8) |
+	       (static_cast<uint32_t>(w) << 15) |
+	       (static_cast<uint32_t>(h) << 22);
+}
+
+struct RegionPx {
+	uint32_t x, y, w, h;
+};
+
+RegionPx resolveRegion(uint32_t packed, uint32_t texW, uint32_t texH)
+{
+	if ((packed & 1u) == 0) {
+		return {0, 0, texW, texH};
 	}
-	if (value > 100) {
-		return 100;
-	}
-	return value;
+	const uint64_t px = (packed >> 1) & 0x7f;
+	const uint64_t py = (packed >> 8) & 0x7f;
+	const uint64_t pw = (packed >> 15) & 0x7f;
+	const uint64_t ph = (packed >> 22) & 0x7f;
+	RegionPx r{};
+	r.x = static_cast<uint32_t>(texW * px / 100u);
+	r.y = static_cast<uint32_t>(texH * py / 100u);
+	const uint32_t x2 = static_cast<uint32_t>(texW * std::min<uint64_t>(px + pw, 100u) / 100u);
+	const uint32_t y2 = static_cast<uint32_t>(texH * std::min<uint64_t>(py + ph, 100u) / 100u);
+	r.x = std::min(r.x, texW - 1);
+	r.y = std::min(r.y, texH - 1);
+	r.w = std::max(1u, std::min(x2, texW) > r.x ? std::min(x2, texW) - r.x : 1u);
+	r.h = std::max(1u, std::min(y2, texH) > r.y ? std::min(y2, texH) - r.y : 1u);
+	return r;
 }
 } // namespace
 
@@ -34,9 +67,8 @@ void MotionDetector::setEnabled(bool enabled)
 	enabled_ = enabled;
 	if (!enabled_) {
 		ensureCallbackRemoved();
-		resetStillness();
 		monitoring_ = false;
-		clearPreviousFrame();
+		requestReset();
 	} else if (recording_active_ && !monitoring_) {
 		// Enabled mid-recording: start watching right away.
 		startMonitoring();
@@ -53,13 +85,7 @@ void MotionDetector::setInactivityDuration(seconds duration)
 
 void MotionDetector::setSensitivityPercent(double percent)
 {
-	if (percent < 0.1) {
-		percent = 0.1;
-	}
-	if (percent > 50.0) {
-		percent = 50.0;
-	}
-	sensitivity_percent_ = percent;
+	sensitivity_percent_.store(std::max(0.1, std::min(50.0, percent)));
 }
 
 void MotionDetector::setMinimumRecordingDuration(seconds duration)
@@ -76,8 +102,7 @@ void MotionDetector::setRegionEnabled(bool enabled)
 		return;
 	}
 	region_enabled_ = enabled;
-	clearPreviousFrame();
-	resetStillness();
+	publishRegion();
 }
 
 void MotionDetector::setRegionPercent(int x, int y, int w, int h)
@@ -87,8 +112,7 @@ void MotionDetector::setRegionPercent(int x, int y, int w, int h)
 	region_w_percent_ = clampPercent(w);
 	region_h_percent_ = clampPercent(h);
 	clampRegion();
-	clearPreviousFrame();
-	resetStillness();
+	publishRegion();
 }
 
 void MotionDetector::regionPercent(int &x, int &y, int &w, int &h) const
@@ -101,12 +125,8 @@ void MotionDetector::regionPercent(int &x, int &y, int &w, int &h) const
 
 void MotionDetector::clampRegion()
 {
-	if (region_w_percent_ < 1) {
-		region_w_percent_ = 1;
-	}
-	if (region_h_percent_ < 1) {
-		region_h_percent_ = 1;
-	}
+	region_w_percent_ = std::max(1, region_w_percent_);
+	region_h_percent_ = std::max(1, region_h_percent_);
 	if (region_x_percent_ + region_w_percent_ > 100) {
 		region_x_percent_ = 100 - region_w_percent_;
 	}
@@ -115,69 +135,41 @@ void MotionDetector::clampRegion()
 	}
 }
 
-void MotionDetector::resolveRegionPixels(uint32_t frameW, uint32_t frameH,
-					 uint32_t &rx, uint32_t &ry,
-					 uint32_t &rw, uint32_t &rh) const
+void MotionDetector::publishRegion()
 {
-	if (!region_enabled_) {
-		rx = 0;
-		ry = 0;
-		rw = frameW;
-		rh = frameH;
-		return;
-	}
+	region_packed_.store(packRegion(region_enabled_, region_x_percent_,
+					region_y_percent_, region_w_percent_,
+					region_h_percent_));
+	// Region changed: previous frame is no longer comparable.
+	requestReset();
+}
 
-	rx = static_cast<uint32_t>((static_cast<uint64_t>(frameW) *
-				    static_cast<uint64_t>(region_x_percent_)) /
-				   100ull);
-	ry = static_cast<uint32_t>((static_cast<uint64_t>(frameH) *
-				    static_cast<uint64_t>(region_y_percent_)) /
-				   100ull);
-	const uint32_t x2 =
-		static_cast<uint32_t>((static_cast<uint64_t>(frameW) *
-				       static_cast<uint64_t>(region_x_percent_ +
-							     region_w_percent_)) /
-				      100ull);
-	const uint32_t y2 =
-		static_cast<uint32_t>((static_cast<uint64_t>(frameH) *
-				       static_cast<uint64_t>(region_y_percent_ +
-							     region_h_percent_)) /
-				      100ull);
-
-	rw = x2 > rx ? x2 - rx : 1;
-	rh = y2 > ry ? y2 - ry : 1;
-	if (rx + rw > frameW) {
-		rw = frameW - rx;
-	}
-	if (ry + rh > frameH) {
-		rh = frameH - ry;
-	}
-	if (rw < 1) {
-		rw = 1;
-	}
-	if (rh < 1) {
-		rh = 1;
-	}
+void MotionDetector::requestReset()
+{
+	still_since_ns_.store(0);
+	last_motion_percent_.store(0.0);
+	reset_generation_.fetch_add(1);
 }
 
 MotionDetector::seconds MotionDetector::stillnessDuration() const
 {
-	if (!stillness_active_) {
+	const int64_t since = still_since_ns_.load();
+	if (since == 0) {
 		return seconds{0};
 	}
-	return std::chrono::duration_cast<seconds>(clock::now() -
-						   stillness_started_);
+	return std::chrono::duration_cast<seconds>(
+		std::chrono::nanoseconds{std::max<int64_t>(0, steadyNowNs() - since)});
 }
 
 bool MotionDetector::shouldAutoStop(seconds recordingElapsed) const
 {
-	if (!enabled_ || !monitoring_) {
+	if (!enabled_ || !monitoring_ || paused_) {
 		return false;
 	}
 	if (recordingElapsed < min_recording_duration_) {
 		return false;
 	}
-	if (!stillness_active_) {
+	if (still_since_ns_.load() == 0) {
 		return false;
 	}
 	return stillnessDuration() >= inactivity_duration_;
@@ -196,33 +188,30 @@ void MotionDetector::onRecordingStarted()
 void MotionDetector::startMonitoring()
 {
 	monitoring_ = true;
-	resetStillness();
-	clearPreviousFrame();
-	last_motion_percent_ = 0.0;
+	requestReset();
 	if (!paused_) {
 		ensureCallbackRegistered();
 	}
 	blog(LOG_INFO,
-	     "OBS Auto Stop: motion detection started (inactivity %lld s, sensitivity %.2f%%, min rec %lld s, region %s)",
+	     "OBS Auto Stop: motion detection started (inactivity %lld s, sensitivity %.2f%%, min rec %lld s, region %s, gpu %ux%u)",
 	     static_cast<long long>(inactivity_duration_.count()),
-	     sensitivity_percent_,
+	     sensitivity_percent_.load(),
 	     static_cast<long long>(min_recording_duration_.count()),
-	     region_enabled_ ? "on" : "full-frame");
+	     region_enabled_ ? "on" : "full-frame", kAnalyzeWidth,
+	     kAnalyzeHeight);
 }
 
 void MotionDetector::onRecordingPaused()
 {
 	paused_ = true;
 	ensureCallbackRemoved();
-	resetStillness();
-	clearPreviousFrame();
+	requestReset();
 }
 
 void MotionDetector::onRecordingResumed()
 {
 	paused_ = false;
-	resetStillness();
-	clearPreviousFrame();
+	requestReset();
 	if (monitoring_) {
 		ensureCallbackRegistered();
 	}
@@ -234,78 +223,7 @@ void MotionDetector::onRecordingStopped()
 	paused_ = false;
 	monitoring_ = false;
 	ensureCallbackRemoved();
-	resetStillness();
-	clearPreviousFrame();
-	last_motion_percent_ = 0.0;
-}
-
-void MotionDetector::onVideoFrame(const struct video_data *frame)
-{
-	if (!enabled_ || !monitoring_ || !frame || !frame->data[0]) {
-		return;
-	}
-
-	const uint32_t w = analyze_width_ ? analyze_width_ : kAnalyzeWidth;
-	const uint32_t h = analyze_height_ ? analyze_height_ : kAnalyzeHeight;
-	const uint8_t *cur = frame->data[0];
-	const uint32_t stride = frame->linesize[0];
-
-	uint32_t rx = 0, ry = 0, rw = w, rh = h;
-	resolveRegionPixels(w, h, rx, ry, rw, rh);
-	region_pixel_w_ = rw;
-	region_pixel_h_ = rh;
-
-	const size_t count = static_cast<size_t>(rw) * static_cast<size_t>(rh);
-	std::vector<uint8_t> region;
-	region.resize(count);
-
-	for (uint32_t y = 0; y < rh; ++y) {
-		const uint8_t *src =
-			cur + static_cast<size_t>(ry + y) * stride + rx;
-		uint8_t *dst = region.data() + static_cast<size_t>(y) * rw;
-		std::copy(src, src + rw, dst);
-	}
-
-	if (prev_luma_.size() == count) {
-		last_motion_percent_ =
-			meanAbsDiffPercent(prev_luma_.data(), region.data(), count);
-		if (last_motion_percent_ >= sensitivity_percent_) {
-			resetStillness();
-		} else if (!stillness_active_) {
-			stillness_started_ = clock::now();
-			stillness_active_ = true;
-		}
-		static auto last_log = clock::time_point{};
-		const auto now = clock::now();
-		if (last_log.time_since_epoch().count() == 0 ||
-		    now - last_log >= std::chrono::seconds{1}) {
-			last_log = now;
-			blog(LOG_INFO,
-			     "OBS Auto Stop: motion=%.2f%% sens=%.2f%% still=%lld/%lld region=%ux%u",
-			     last_motion_percent_, sensitivity_percent_,
-			     static_cast<long long>(stillnessDuration().count()),
-			     static_cast<long long>(inactivity_duration_.count()),
-			     region_pixel_w_, region_pixel_h_);
-		}
-	}
-
-	prev_luma_ = std::move(region);
-}
-
-struct video_scale_info MotionDetector::makeConversion()
-{
-	struct video_scale_info info {};
-	info.format = VIDEO_FORMAT_Y800;
-	info.width = kAnalyzeWidth;
-	info.height = kAnalyzeHeight;
-	info.range = VIDEO_RANGE_FULL;
-	info.colorspace = VIDEO_CS_DEFAULT;
-	return info;
-}
-
-void MotionDetector::rawVideoCallback(void *param, struct video_data *frame)
-{
-	static_cast<MotionDetector *>(param)->onVideoFrame(frame);
+	requestReset();
 }
 
 void MotionDetector::ensureCallbackRegistered()
@@ -313,11 +231,14 @@ void MotionDetector::ensureCallbackRegistered()
 	if (callback_registered_) {
 		return;
 	}
-	struct video_scale_info conversion = makeConversion();
-	analyze_width_ = conversion.width;
-	analyze_height_ = conversion.height;
-	obs_add_raw_video_callback2(&conversion, kFrameRateDivisor,
-				    rawVideoCallback, this);
+	// Graphics-thread state is reset here while no callback can run.
+	staged_[0] = staged_[1] = false;
+	next_stage_ = 0;
+	last_frame_ts_ = 0;
+	last_sample_ts_ = 0;
+	have_prev_ = false;
+	seen_generation_ = reset_generation_.load();
+	obs_add_main_rendered_callback(renderedCallback, this);
 	callback_registered_ = true;
 }
 
@@ -326,46 +247,182 @@ void MotionDetector::ensureCallbackRemoved()
 	if (!callback_registered_) {
 		return;
 	}
-	obs_remove_raw_video_callback(rawVideoCallback, this);
+	// Rendered callbacks run under libobs' draw-callback mutex, so once this
+	// returns the callback is not executing and will not run again.
+	obs_remove_main_rendered_callback(renderedCallback, this);
 	callback_registered_ = false;
-}
-
-void MotionDetector::resetStillness()
-{
-	stillness_active_ = false;
-	stillness_started_ = clock::time_point{};
-}
-
-void MotionDetector::clearPreviousFrame()
-{
+	destroyGraphics();
 	prev_luma_.clear();
-	region_pixel_w_ = 0;
-	region_pixel_h_ = 0;
+	prev_luma_.shrink_to_fit();
+	cur_luma_.clear();
+	cur_luma_.shrink_to_fit();
+	have_prev_ = false;
 }
 
-double MotionDetector::meanAbsDiffPercent(const uint8_t *a, const uint8_t *b,
-					  size_t count)
+void MotionDetector::destroyGraphics()
 {
-	// Motion score = percent of sampled pixels whose luma changed by more
-	// than kPixelDelta. Mean-abs-diff diluted typical video to ~1% on a
-	// 160x90 downsample, so a 2% threshold falsely treated motion as still.
-	constexpr int kPixelDelta = 12;
+	if (!texrender_ && !stage_[0] && !stage_[1]) {
+		return;
+	}
+	if (!obs_initialized()) {
+		// libobs already shut down; its graphics objects are gone.
+		texrender_ = nullptr;
+		stage_[0] = stage_[1] = nullptr;
+		return;
+	}
+	obs_enter_graphics();
+	gs_texrender_destroy(texrender_);
+	gs_stagesurface_destroy(stage_[0]);
+	gs_stagesurface_destroy(stage_[1]);
+	obs_leave_graphics();
+	texrender_ = nullptr;
+	stage_[0] = stage_[1] = nullptr;
+	staged_[0] = staged_[1] = false;
+}
+
+void MotionDetector::renderedCallback(void *param)
+{
+	static_cast<MotionDetector *>(param)->onRendered();
+}
+
+void MotionDetector::onRendered()
+{
+	// Called once per video mix per frame; only act once per frame.
+	const uint64_t frame_ts = obs_get_video_frame_time();
+	if (frame_ts == last_frame_ts_) {
+		return;
+	}
+	last_frame_ts_ = frame_ts;
+	if (last_sample_ts_ != 0 && frame_ts - last_sample_ts_ < kSampleIntervalNs) {
+		return;
+	}
+	last_sample_ts_ = frame_ts;
+
+	const uint32_t gen = reset_generation_.load();
+	if (gen != seen_generation_) {
+		seen_generation_ = gen;
+		have_prev_ = false;
+		staged_[0] = staged_[1] = false; // staged before the reset
+		still_since_ns_.store(0);
+	}
+
+	gs_texture_t *tex = obs_get_main_texture();
+	if (!tex) {
+		return;
+	}
+	const uint32_t tex_w = gs_texture_get_width(tex);
+	const uint32_t tex_h = gs_texture_get_height(tex);
+	if (tex_w == 0 || tex_h == 0) {
+		return;
+	}
+
+	// 1) Read back the sample staged last time (GPU finished long ago).
+	const int read_idx = next_stage_ ^ 1;
+	if (staged_[read_idx] && stage_[read_idx]) {
+		uint8_t *data = nullptr;
+		uint32_t linesize = 0;
+		if (gs_stagesurface_map(stage_[read_idx], &data, &linesize)) {
+			analyzeMapped(data, linesize);
+			gs_stagesurface_unmap(stage_[read_idx]);
+		}
+		staged_[read_idx] = false;
+	}
+
+	// 2) Draw the region into the small target and stage it.
+	if (!texrender_) {
+		texrender_ = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+	}
+	gs_stage_surface *&stage = stage_[next_stage_];
+	if (!stage) {
+		stage = gs_stagesurface_create(kAnalyzeWidth, kAnalyzeHeight, GS_RGBA);
+	}
+	if (!texrender_ || !stage) {
+		return;
+	}
+
+	const RegionPx r = resolveRegion(region_packed_.load(), tex_w, tex_h);
+
+	gs_texrender_reset(texrender_);
+	if (gs_texrender_begin(texrender_, kAnalyzeWidth, kAnalyzeHeight)) {
+		gs_ortho(0.0f, static_cast<float>(r.w), 0.0f,
+			 static_cast<float>(r.h), -100.0f, 100.0f);
+		gs_blend_state_push();
+		gs_enable_blending(false);
+		gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+		gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");
+		gs_effect_set_texture(image, tex);
+		while (gs_effect_loop(effect, "Draw")) {
+			gs_draw_sprite_subregion(tex, 0, r.x, r.y, r.w, r.h);
+		}
+		// The main texture may become the render target again right after
+		// gs_texrender_end(); D3D11 would then silently drop the SRV while
+		// libobs' binding cache still thinks it is bound. Unbind explicitly.
+		gs_load_texture(nullptr, 0);
+		gs_blend_state_pop();
+		gs_texrender_end(texrender_);
+
+		gs_stage_texture(stage, gs_texrender_get_texture(texrender_));
+		staged_[next_stage_] = true;
+		next_stage_ ^= 1;
+	}
+}
+
+void MotionDetector::analyzeMapped(const uint8_t *rgba, uint32_t linesize)
+{
+	constexpr size_t count =
+		static_cast<size_t>(kAnalyzeWidth) * kAnalyzeHeight;
+	cur_luma_.resize(count);
+	for (uint32_t y = 0; y < kAnalyzeHeight; ++y) {
+		const uint8_t *src = rgba + static_cast<size_t>(y) * linesize;
+		uint8_t *dst = cur_luma_.data() + static_cast<size_t>(y) * kAnalyzeWidth;
+		for (uint32_t x = 0; x < kAnalyzeWidth; ++x) {
+			const uint32_t r = src[x * 4 + 0];
+			const uint32_t g = src[x * 4 + 1];
+			const uint32_t b = src[x * 4 + 2];
+			// BT.709 luma, integer weights summing to 256.
+			dst[x] = static_cast<uint8_t>((54u * r + 183u * g + 19u * b) >> 8);
+		}
+	}
+
+	if (have_prev_ && prev_luma_.size() == count) {
+		const double motion =
+			changedPixelPercent(prev_luma_.data(), cur_luma_.data(), count);
+		last_motion_percent_.store(motion);
+		if (motion >= sensitivity_percent_.load()) {
+			still_since_ns_.store(0);
+		} else if (still_since_ns_.load() == 0) {
+			still_since_ns_.store(steadyNowNs());
+		}
+
+		const uint64_t now = obs_get_video_frame_time();
+		if (now - last_debug_log_ts_ >= 5'000'000'000ull) {
+			last_debug_log_ts_ = now;
+			blog(LOG_DEBUG,
+			     "OBS Auto Stop: motion=%.2f%% sens=%.2f%% still=%lld s",
+			     motion, sensitivity_percent_.load(),
+			     static_cast<long long>(stillnessDuration().count()));
+		}
+	}
+
+	prev_luma_.swap(cur_luma_);
+	have_prev_ = true;
+}
+
+double MotionDetector::changedPixelPercent(const uint8_t *a, const uint8_t *b,
+					   size_t count)
+{
+	// Mean-abs-diff diluted typical video to ~1% on a small downsample, so
+	// the score is the share of pixels whose luma moved by >= kPixelDelta.
 	if (count == 0) {
 		return 0.0;
 	}
-	const size_t step = count > 4096 ? 4 : 1;
-	size_t samples = 0;
 	size_t changed = 0;
-	for (size_t i = 0; i < count; i += step) {
-		const int d = std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i]));
-		if (d >= kPixelDelta) {
-			++changed;
-		}
-		++samples;
+	for (size_t i = 0; i < count; ++i) {
+		const uint8_t x = a[i];
+		const uint8_t y = b[i];
+		const uint8_t d = x > y ? static_cast<uint8_t>(x - y)
+					: static_cast<uint8_t>(y - x);
+		changed += d >= kPixelDelta ? 1u : 0u;
 	}
-	if (samples == 0) {
-		return 0.0;
-	}
-	return (static_cast<double>(changed) / static_cast<double>(samples)) *
-	       100.0;
+	return static_cast<double>(changed) * 100.0 / static_cast<double>(count);
 }
