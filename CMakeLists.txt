@@ -118,6 +118,8 @@ if(MSVC)
     # Sources contain UTF-8 (Japanese) text; without /utf-8 MSVC reads them
     # in the system code page.
     target_compile_options(obs-auto-stop PRIVATE /utf-8 /W4 /permissive- /Gy /Gw)
+    # getenv() is only used to read optional OBS_AUTOSTOP_* test overrides.
+    target_compile_definitions(obs-auto-stop PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_link_options(obs-auto-stop PRIVATE $<$<CONFIG:Release,MinSizeRel>:/OPT:REF /OPT:ICF>)
     if(OBS_AUTOSTOP_WARNINGS_AS_ERRORS)
         target_compile_options(obs-auto-stop PRIVATE /WX)
