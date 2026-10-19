@@ -49,6 +49,9 @@ public:
 
 	void onRecordingStarted();
 	void onRecordingStopped();
+	// Pause stops frame analysis; resume restarts the stillness count.
+	void onRecordingPaused();
+	void onRecordingResumed();
 
 	// Raw-video callback target (registered via obs_add_raw_video_callback).
 	void onVideoFrame(const struct video_data *frame);
@@ -56,6 +59,7 @@ public:
 	static struct video_scale_info makeConversion();
 
 private:
+	void startMonitoring();
 	void ensureCallbackRegistered();
 	void ensureCallbackRemoved();
 	static void rawVideoCallback(void *param, struct video_data *frame);
@@ -79,6 +83,8 @@ private:
 	int region_h_percent_ = 100;
 
 	bool monitoring_ = false;
+	bool recording_active_ = false;
+	bool paused_ = false;
 	bool callback_registered_ = false;
 
 	std::vector<uint8_t> prev_luma_;

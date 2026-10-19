@@ -37,6 +37,7 @@ public:
 	void onRecordingStopped();
 
 private:
+	void startMonitoring();
 	void clearHooks();
 	void hookCurrentScene();
 	void hookSource(obs_source *source);
@@ -50,6 +51,7 @@ private:
 	seconds min_recording_duration_{5 * 60};
 
 	bool monitoring_ = false;
+	bool recording_active_ = false;
 	bool ended_ = false;
 	std::string ended_name_;
 

@@ -18,14 +18,13 @@ public:
 	seconds maxRecordingDuration() const { return max_duration_; }
 
 	bool isRecording() const { return recording_; }
+	bool isPaused() const { return recording_ && paused_; }
 	seconds elapsedRecordingTime() const;
 	bool hasReachedMaxDuration() const;
 
-	// Called from obs_frontend_event_cb.
+	// Called from obs_frontend_event_cb (UI thread). All RecordingMonitor
+	// state is owned by the UI thread; do not call from other threads.
 	void onFrontendEvent(int event);
-
-	// Called from obs tick callback while recording is active.
-	void tick();
 
 	// Reset timers/counters (e.g. after a manual stop).
 	void reset();
@@ -33,7 +32,6 @@ public:
 private:
 	void onRecordingStarted();
 	void onRecordingStopped();
-	void accumulatePauseIfNeeded(clock::time_point now);
 
 	bool enabled_ = true;
 	seconds max_duration_{120 * 60}; // default 120 minutes
@@ -42,7 +40,5 @@ private:
 	bool paused_ = false;
 
 	clock::time_point segment_started_{};
-	clock::time_point pause_started_{};
 	std::chrono::milliseconds active_elapsed_{0};
-	std::chrono::milliseconds paused_total_{0};
 };

@@ -19,6 +19,9 @@ void SilenceDetector::setEnabled(bool enabled)
 		ensureCallbackRemoved();
 		resetSilence();
 		monitoring_ = false;
+	} else if (recording_active_ && !monitoring_) {
+		// Enabled mid-recording: start watching right away.
+		startMonitoring();
 	}
 }
 
@@ -81,20 +84,48 @@ bool SilenceDetector::shouldAutoStop(seconds recordingElapsed) const
 
 void SilenceDetector::onRecordingStarted()
 {
+	recording_active_ = true;
+	paused_ = false;
+	monitoring_ = false;
 	resetSilence();
-	monitoring_ = enabled_;
+	if (enabled_) {
+		startMonitoring();
+	}
+}
+
+void SilenceDetector::startMonitoring()
+{
+	resetSilence();
+	monitoring_ = true;
+	if (!paused_) {
+		ensureCallbackRegistered();
+	}
+	blog(LOG_INFO,
+	     "OBS Auto Stop: silence detection started (duration %lld s, threshold %.1f dB, min rec %lld s)",
+	     static_cast<long long>(silence_duration_.count()), threshold_db_,
+	     static_cast<long long>(min_recording_duration_.count()));
+}
+
+void SilenceDetector::onRecordingPaused()
+{
+	paused_ = true;
+	ensureCallbackRemoved();
+	resetSilence();
+}
+
+void SilenceDetector::onRecordingResumed()
+{
+	paused_ = false;
+	resetSilence();
 	if (monitoring_) {
 		ensureCallbackRegistered();
-		blog(LOG_INFO,
-		     "OBS Auto Stop: silence detection started (duration %lld s, threshold %.1f dB, min rec %lld s)",
-		     static_cast<long long>(silence_duration_.count()),
-		     threshold_db_,
-		     static_cast<long long>(min_recording_duration_.count()));
 	}
 }
 
 void SilenceDetector::onRecordingStopped()
 {
+	recording_active_ = false;
+	paused_ = false;
 	monitoring_ = false;
 	ensureCallbackRemoved();
 	resetSilence();

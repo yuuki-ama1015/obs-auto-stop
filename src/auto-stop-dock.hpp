@@ -11,6 +11,7 @@ class QLabel;
 class QPushButton;
 class QTimer;
 class QShowEvent;
+class QDockWidget;
 
 class RecordingMonitor;
 class MotionDetector;
@@ -52,7 +53,7 @@ private:
 	void updateRegionStatusLabel();
 	void applyMinRecordingToAll(int minutes);
 	void showEvent(QShowEvent *event) override;
-	QWidget *floatingWindow() const;
+	QDockWidget *hostDock() const;
 	void ensureFloatingMinimizeButton();
 	void updateCombineHint();
 

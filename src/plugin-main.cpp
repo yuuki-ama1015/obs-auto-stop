@@ -8,6 +8,9 @@
 #include "recording-monitor.hpp"
 #include "stop-controller.hpp"
 
+#include <QObject>
+#include <QTimer>
+
 #include <chrono>
 #include <cstdlib>
 
@@ -22,6 +25,10 @@ MediaEndWatcher g_media;
 SilenceDetector g_silence;
 StopController g_stop;
 AutoStopDock *g_dock = nullptr;
+// Stop conditions are evaluated on the UI thread (same thread as frontend
+// events and the dock), so RecordingMonitor/StopController need no locking.
+QTimer *g_eval_timer = nullptr;
+constexpr int kEvalIntervalMs = 250;
 
 // Remember OBS_AUTOSTOP_* env overrides so they can win over profile
 // loadSettings() which runs later when the dock is created.
@@ -59,15 +66,49 @@ void applyEnvOverrides()
 	}
 }
 
+void evaluateStopConditions();
+
+void startEvalTimer()
+{
+	if (g_eval_timer) {
+		return;
+	}
+	g_eval_timer = new QTimer();
+	g_eval_timer->setInterval(kEvalIntervalMs);
+	g_eval_timer->setTimerType(Qt::CoarseTimer);
+	QObject::connect(g_eval_timer, &QTimer::timeout,
+			 &evaluateStopConditions);
+	g_eval_timer->start();
+}
+
+void stopEvalTimer()
+{
+	if (!g_eval_timer) {
+		return;
+	}
+	g_eval_timer->stop();
+	delete g_eval_timer;
+	g_eval_timer = nullptr;
+}
+
 void onFrontendEvent(enum obs_frontend_event event, void *)
 {
 	g_monitor.onFrontendEvent(static_cast<int>(event));
 
 	switch (event) {
 	case OBS_FRONTEND_EVENT_RECORDING_STARTED:
+		g_stop.clearStopRequested();
 		g_motion.onRecordingStarted();
 		g_media.onRecordingStarted();
 		g_silence.onRecordingStarted();
+		break;
+	case OBS_FRONTEND_EVENT_RECORDING_PAUSED:
+		g_motion.onRecordingPaused();
+		g_silence.onRecordingPaused();
+		break;
+	case OBS_FRONTEND_EVENT_RECORDING_UNPAUSED:
+		g_motion.onRecordingResumed();
+		g_silence.onRecordingResumed();
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STOPPED:
 		g_motion.onRecordingStopped();
@@ -86,15 +127,20 @@ void onFrontendEvent(enum obs_frontend_event event, void *)
 						    "OBS Auto Stop", g_dock);
 			blog(LOG_INFO, "OBS Auto Stop: dock registered");
 		}
+		startEvalTimer();
 		break;
 	default:
 		break;
 	}
 }
 
-void onTick(void *, float)
+void evaluateStopConditions()
 {
 	if (!g_monitor.isRecording()) {
+		return;
+	}
+	// Nothing auto-stops while paused (timer and detectors are frozen too).
+	if (g_monitor.isPaused()) {
 		return;
 	}
 
@@ -209,13 +255,12 @@ bool obs_module_load(void)
 	applyEnvOverrides();
 
 	obs_frontend_add_event_callback(onFrontendEvent, nullptr);
-	obs_add_tick_callback(onTick, nullptr);
 	return true;
 }
 
 void obs_module_unload(void)
 {
-	obs_remove_tick_callback(onTick, nullptr);
+	stopEvalTimer();
 	obs_frontend_remove_event_callback(onFrontendEvent, nullptr);
 	g_motion.onRecordingStopped();
 	g_media.onRecordingStopped();

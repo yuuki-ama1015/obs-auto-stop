@@ -7,10 +7,8 @@
 
 void RecordingMonitor::setEnabled(bool enabled)
 {
+	// Elapsed state is kept; hasReachedMaxDuration() checks enabled_.
 	enabled_ = enabled;
-	if (!enabled_) {
-		// Keep elapsed state, but do not auto-stop while disabled.
-	}
 }
 
 void RecordingMonitor::setMaxRecordingDuration(seconds duration)
@@ -57,13 +55,14 @@ void RecordingMonitor::onFrontendEvent(int event)
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_PAUSED:
 		if (recording_ && !paused_) {
-			pause_started_ = clock::now();
+			// Freeze the active segment; pause time is never counted.
+			active_elapsed_ += std::chrono::duration_cast<std::chrono::milliseconds>(
+				clock::now() - segment_started_);
 			paused_ = true;
 		}
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_UNPAUSED:
 		if (recording_ && paused_) {
-			accumulatePauseIfNeeded(clock::now());
 			// Resume the active segment clock.
 			segment_started_ = clock::now();
 			paused_ = false;
@@ -74,31 +73,22 @@ void RecordingMonitor::onFrontendEvent(int event)
 	}
 }
 
-void RecordingMonitor::tick()
-{
-	if (!recording_ || paused_) {
-		return;
-	}
-	// Elapsed is computed on demand from segment_started_; nothing else required per tick.
-}
-
 void RecordingMonitor::reset()
 {
 	recording_ = false;
 	paused_ = false;
 	active_elapsed_ = std::chrono::milliseconds{0};
-	paused_total_ = std::chrono::milliseconds{0};
 	segment_started_ = clock::time_point{};
-	pause_started_ = clock::time_point{};
 }
 
 void RecordingMonitor::onRecordingStarted()
 {
-	recording_ = true;
-	paused_ = false;
+	// Set the clock before flagging recording_ so elapsed is never computed
+	// against a default (epoch) time point.
 	active_elapsed_ = std::chrono::milliseconds{0};
-	paused_total_ = std::chrono::milliseconds{0};
 	segment_started_ = clock::now();
+	paused_ = false;
+	recording_ = true;
 	blog(LOG_INFO, "OBS Auto Stop: recording started (max %lld s)",
 	     static_cast<long long>(max_duration_.count()));
 }
@@ -109,8 +99,6 @@ void RecordingMonitor::onRecordingStopped()
 	if (recording_ && !paused_) {
 		active_elapsed_ +=
 			std::chrono::duration_cast<std::chrono::milliseconds>(now - segment_started_);
-	} else if (recording_ && paused_) {
-		accumulatePauseIfNeeded(now);
 	}
 
 	// Freeze state before reading elapsed so we do not double-count the open segment.
@@ -119,14 +107,4 @@ void RecordingMonitor::onRecordingStopped()
 	blog(LOG_INFO, "OBS Auto Stop: recording stopped (elapsed %lld s)",
 	     static_cast<long long>(elapsedRecordingTime().count()));
 	reset();
-}
-
-void RecordingMonitor::accumulatePauseIfNeeded(clock::time_point now)
-{
-	if (!paused_) {
-		return;
-	}
-	paused_total_ += std::chrono::duration_cast<std::chrono::milliseconds>(now - pause_started_);
-	// Pause time is excluded from active_elapsed_ by not advancing segment during pause.
-	(void)paused_total_;
 }
