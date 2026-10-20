@@ -19,8 +19,8 @@ English: External OBS Studio plugin that can auto-stop recording on a max timer 
 
 最新の配布 zip は GitHub Releases にあります。
 
-- 公開済み: [v0.1.0-pre-region](https://github.com/yuuki-ama1015/obs-auto-stop/releases/tag/v0.1.0-pre-region)
-- v0.2.0 は最終確認待ちの Release 下書きとして準備中です。配布候補:
+- 公開済み: [v0.2.0](https://github.com/yuuki-ama1015/obs-auto-stop/releases/tag/v0.2.0)
+- 配布ファイル:
   - Windows: `obs-auto-stop-v0.2.0-windows-x64.zip`
   - Linux: `obs-auto-stop-v0.2.0-linux-x64.zip`
   - 整合性確認用: `SHA256SUMS.txt`

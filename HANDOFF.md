@@ -1,13 +1,14 @@
 # 引き継ぎメモ（obs-auto-stop）
 
-## 2026-10-19 の追加作業
+## 2026-10-19〜21 の追加作業
 
 - 最小化修正・バージョン0.2.0・Windows/Linux zip作成を `fd4005e`、ドックのスクロール対応を `65bddcc` で反映。最終CI `39258171293` 成功、PCにも最終ビルドを導入済み。
 - 旧版 `ad3bf56` と同条件の NVENC 実録画で比較し、今回の素材では CPU/GPU/描画時間が低下。メディア監視1件＋フロートドック表示中の録画終了もハングせず、リーク報告0。
-- Release `v0.2.0` は最終ビルドの両 zip と SHA256 添付済みの**下書き**。VLC は管理者承認キャンセルで未導入・未検証。タスクバーからのクリック復帰はユーザー確認待ち。最終スクロール修正の画面操作もユーザー入力競合で確認待ち。公開済みと扱わない。
+- 2026-10-21 に VLC 3.0.24 を導入し、最終候補でループ ON の録画継続、OFF のメディア終了による自動停止、録画中の OBS 終了を確認。3録画の全編デコード成功、終了時リーク報告0。最終スクロール・重なり解消・収納中案内も確認。タスクバーのクリック復帰はユーザーの実操作による回答で確認した。
+- [Release v0.2.0](https://github.com/yuuki-ama1015/obs-auto-stop/releases/tag/v0.2.0) を公開済み。Windows/Linux zip と SHA256 を添付。Linux はビルド確認のみ。検証で変更した設定6ファイルは当日の開始直前へ戻し、SHA256 一致を確認。
 - 最新の証拠と未実施項目は [docs/V0.2.0-VALIDATION.md](docs/V0.2.0-VALIDATION.md)。以下の旧メモより、この追加作業と検証文書を優先する。
 
-最終更新: 2026-10-19（Asia/Tokyo）  
+最終更新: 2026-10-21（Asia/Tokyo）
 リポジトリ: https://github.com/yuuki-ama1015/obs-auto-stop （**公開** / `main`）  
 直近: 2026-10-19 にコードレビュー（REVIEW）指摘を PR #11〜#15 で一括対応（下の「7. マージ済み PR」参照）
 
@@ -118,9 +119,8 @@ gh workflow run build-windows.yml --repo yuuki-ama1015/obs-auto-stop --ref main 
 
 ## 5. 配布・リリース
 
-- 公開リリース: [v0.1.0-pre-region](https://github.com/yuuki-ama1015/obs-auto-stop/releases/tag/v0.1.0-pre-region)  
-  - 元は領域機能前の `ed48a22` 起点。その後 Windows/Linux zip を差し替えたことがあるが、**現行 main の最新機能一式とは一致していない可能性が高い**
-- **未対応（推奨）:** main tip 向けの新しいタグ／Release（例: `v0.2.0`）を切って、最新 Windows/Linux zip を付け直す
+- 公開リリース: [v0.2.0](https://github.com/yuuki-ama1015/obs-auto-stop/releases/tag/v0.2.0)。ビルド元は `65bddcc`、その後の main は検証記録の更新。
+- Windows/Linux x64 zip と SHA256SUMS を同梱。実機確認範囲は検証文書を参照。
 
 ---
 
@@ -164,8 +164,8 @@ gh workflow run build-windows.yml --repo yuuki-ama1015/obs-auto-stop --ref main 
 
 優先度はユーザー判断。候補のみ。
 
-1. **最新 main の Release を切る**（配布 zip を現行機能に合わせる）
-2. **メディア終了 / 無音 / AND の実機再確認**（チェックリストをログ付きで）。特に D3D11 での静止検出（GPU 経路）と、フロートドックのタスクバー最小化
+1. Linux 実機での録画確認（Windows の今回の依頼範囲は完了）。
+2. AND 条件を使った追加の長時間運用確認。
 3. README の「将来検討」: 黒画面、終了前待機、インストーラなど
 5. OBS 32.2.2 向け SDK でビルドする CI 更新（現状 32.0.2 ベース）
 
