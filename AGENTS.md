@@ -2,11 +2,19 @@
 
 OBS Studio の録画をタイマー／画面静止／メディア終了／無音などで自動停止する外部プラグイン。OBS本体は改造しない。
 
-## 概要（リポジトリから判明）
+## 概要
 - C++ / CMake（`CMakeLists.txt`、`src/`）
-- 配布: GitHub Releases（例: v0.2.0 Windows/Linux zip）
-- 引き継ぎ: `HANDOFF.md`、検証: `docs/V0.2.0-VALIDATION.md`
-- ビルド手順の詳細は README / BUILD 関連ドキュメントを参照。不明点は 不明 とする
+- 配布: GitHub Releases（例: v0.2.0）。進捗: `PROGRESS.md`。検証証拠: `docs/V0.2.0-VALIDATION.md`
+- インストール先は **ProgramData**（OBS 32 は `%APPDATA%\obs-studio\plugins` を読まない）:
+  `C:\ProgramData\obs-studio\plugins\obs-auto-stop\bin\64bit\obs-auto-stop.dll` と locale
+- Windows DLL は主に GitHub Actions（`.github/workflows/build-windows.yml`）。`plugin_ref` は通常 `main`（古いタグ既定に注意）
+- 成功時ログ目安: `plugin loaded` / `dock registered`（`%APPDATA%\obs-studio\logs\`）
+
+## 落とし穴（要約）
+- AppData 配置だとドックが出ない
+- Windows で `obs_module_load` 等のエクスポート欠落に注意（過去に0 exportsで失敗）
+- `calldata_t` は MSVC では `struct calldata` が必要だった経緯あり
+- 静止判定の領域%は出力キャンバス（ウィンドウ枠）基準
 
 ## GitHubで開発を行う場合のルール
 GitHubのリポジトリで開発を行う場合は、以下に従うこと。
